@@ -1,0 +1,134 @@
+{
+  "payees": [
+    { "payee_id": "P001", "name": "Sunbelt Electric Co" },
+    { "payee_id": "P002", "name": "Desert Valley Water Utility" },
+    { "payee_id": "P003", "name": "Horizon Credit Card Services" },
+    { "payee_id": "P004", "name": "Canyon Ridge Mortgage Co" }
+  ],
+  "members": {
+    "10234": {
+      "member_id": "10234",
+      "first_name": "Laura",
+      "last_name": "Whitfield",
+      "email": "laura.whitfield@example.com",
+      "phone": "(602) 555-0142",
+      "address": {
+        "street": "142 Birchwood Ln",
+        "city": "Mesa",
+        "state": "AZ",
+        "zip": "85201"
+      },
+      "member_since": "2018-03-14",
+      "membership_status": "active",
+      "accounts": [
+        {
+          "account_id": "CHK-10234-01",
+          "account_type": "checking",
+          "balance": 2450.32,
+          "status": "active",
+          "is_primary": true,
+          "last_transaction_date": "2026-09-05"
+        },
+        {
+          "account_id": "SAV-10234-01",
+          "account_type": "savings",
+          "balance": 8760.10,
+          "status": "active",
+          "is_primary": false,
+          "last_transaction_date": "2026-08-21"
+        }
+      ]
+    },
+    "20567": {
+      "member_id": "20567",
+      "first_name": "Marcus",
+      "last_name": "Delgado",
+      "email": "marcus.delgado@example.com",
+      "phone": "(520) 555-0198",
+      "address": {
+        "street": "87 Cedar Ct",
+        "city": "Tucson",
+        "state": "AZ",
+        "zip": "85701"
+      },
+      "member_since": "2021-07-01",
+      "membership_status": "active",
+      "accounts": [
+        {
+          "account_id": "CHK-20567-01",
+          "account_type": "checking",
+          "balance": 512.75,
+          "status": "active",
+          "is_primary": true,
+          "last_transaction_date": "2026-09-08"
+        }
+      ]
+    },
+    "30891": {
+      "member_id": "30891",
+      "first_name": "Evelyn",
+      "last_name": "Park",
+      "email": "evelyn.park@example.com",
+      "phone": "(480) 555-0117",
+      "address": {
+        "street": "350 Maple Ave",
+        "city": "Tempe",
+        "state": "AZ",
+        "zip": "85281"
+      },
+      "member_since": "2015-11-30",
+      "membership_status": "inactive",
+      "accounts": [
+        {
+          "account_id": "CHK-30891-01",
+          "account_type": "checking",
+          "balance": 130.00,
+          "status": "active",
+          "is_primary": true,
+          "last_transaction_date": "2025-12-15"
+        },
+        {
+          "account_id": "SAV-30891-01",
+          "account_type": "savings",
+          "balance": 4300.00,
+          "status": "active",
+          "is_primary": false,
+          "last_transaction_date": "2025-12-15"
+        }
+      ]
+    },
+    "40412": {
+      "member_id": "40412",
+      "first_name": "Isaac",
+      "last_name": "Newton-Brooks",
+      "email": "isaac.newtonbrooks@example.com",
+      "phone": "(737) 555-0163",
+      "address": {
+        "street": "29 Harbor View Dr",
+        "city": "Austin",
+        "state": "TX",
+        "zip": "78701"
+      },
+      "member_since": "2019-05-22",
+      "membership_status": "active",
+      "accounts": [
+        {
+          "account_id": "CHK-40412-01",
+          "account_type": "checking",
+          "balance": 3120.60,
+          "status": "active",
+          "is_primary": true,
+          "last_transaction_date": "2026-09-10"
+        },
+        {
+          "account_id": "SAV-40412-01",
+          "account_type": "savings",
+          "balance": 15200.45,
+          "status": "active",
+          "is_primary": false,
+          "last_transaction_date": "2026-09-01"
+        }
+      ]
+    }
+  }
+}
