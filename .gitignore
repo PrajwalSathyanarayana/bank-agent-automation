@@ -1,8 +1,23 @@
+# Python
 venv/
 __pycache__/
 *.pyc
 .env
 *.env
+
+# Evidence and artifacts (runtime generated)
 evidence/
-node_modules/
+artifacts/
+
+# Claude Code working files
+CLAUDE.md
+ARCHITECTURE.md
+DECISIONS.md
+PROGRESS.md
+
+# Playwright
 .playwright/
+
+# Windows
+Thumbs.db
+desktop.ini
