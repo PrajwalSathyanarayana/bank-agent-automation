@@ -11,6 +11,7 @@ class Env(BaseSettings):
     anthropic_api_key: str
     anthropic_model: str
     mock_bank_base_url: str = "http://localhost:5000"
+    mock_bank_secret_key: str
     ws_handoff_port: int = 8765
     artifact_storage_dir: str = "./artifacts"
     evidence_dir: str = "./evidence"
