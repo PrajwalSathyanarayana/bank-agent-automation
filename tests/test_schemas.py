@@ -18,6 +18,7 @@ from src.types.artifact_schema import (
     GlobalAssertion,
     GlobalAssertionType,
     InputParamDefinition,
+    OutputParamDefinition,
     ParamType,
 )
 from src.types.result_schema import (
@@ -182,4 +183,100 @@ def test_step_execution_trace_requires_positive_attempt_count():
             safety_tier=SafetyTier.SAFE,
             attempt_count=0,
             duration_ms=100,
+        )
+
+
+# --- D025: output contract (EXTRACT_TEXT + output_key + output_definitions) ---
+
+def _extract_step(output_key: str = "balance", sequence_index: int = 1) -> Step:
+    return Step(
+        sequence_index=sequence_index,
+        action=ActionType.EXTRACT_TEXT,
+        description="Extract the savings balance",
+        locators=[_valid_locator()],
+        output_key=output_key,
+    )
+
+
+def test_extract_text_step_with_output_key_constructs():
+    step = _extract_step()
+    assert step.action == ActionType.EXTRACT_TEXT
+    assert step.output_key == "balance"
+
+
+def test_extract_text_step_without_output_key_rejected():
+    with pytest.raises(ValidationError):
+        Step(
+            sequence_index=1,
+            action=ActionType.EXTRACT_TEXT,
+            description="Extract the savings balance",
+            locators=[_valid_locator()],
+        )
+
+
+def test_non_extract_step_with_output_key_rejected():
+    with pytest.raises(ValidationError):
+        Step(
+            sequence_index=0,
+            action=ActionType.CLICK,
+            description="Click the search button",
+            locators=[_valid_locator()],
+            output_key="balance",
+        )
+
+
+def test_artifact_with_matching_output_definition_and_extract_step_constructs():
+    artifact = Artifact(
+        metadata=_valid_metadata(),
+        output_definitions=[
+            OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Savings balance")
+        ],
+        steps=[_valid_step(), _extract_step(output_key="balance")],
+    )
+    assert artifact.output_definitions[0].key == "balance"
+
+
+def test_artifact_rejects_orphan_output_definition():
+    with pytest.raises(ValidationError):
+        Artifact(
+            metadata=_valid_metadata(),
+            output_definitions=[
+                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Savings balance")
+            ],
+            steps=[_valid_step()],  # no EXTRACT_TEXT step produces "balance"
+        )
+
+
+def test_artifact_rejects_orphan_extract_step():
+    with pytest.raises(ValidationError):
+        Artifact(
+            metadata=_valid_metadata(),
+            output_definitions=[],  # "balance" never declared
+            steps=[_valid_step(), _extract_step(output_key="balance")],
+        )
+
+
+def test_artifact_rejects_duplicate_output_definition_keys():
+    with pytest.raises(ValidationError):
+        Artifact(
+            metadata=_valid_metadata(),
+            output_definitions=[
+                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="First"),
+                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Duplicate"),
+            ],
+            steps=[_extract_step(output_key="balance")],
+        )
+
+
+def test_artifact_rejects_two_steps_producing_same_output_key():
+    with pytest.raises(ValidationError):
+        Artifact(
+            metadata=_valid_metadata(),
+            output_definitions=[
+                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Savings balance")
+            ],
+            steps=[
+                _extract_step(output_key="balance", sequence_index=1),
+                _extract_step(output_key="balance", sequence_index=2),
+            ],
         )
