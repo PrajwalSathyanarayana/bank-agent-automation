@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Sunbelt Credit Union - Edit Member Profile</title></head>
+<body>
+<table width="100%" cellpadding="4" cellspacing="0" border="0">
+  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
+</table>
+{% if saved %}
+<table width="500" align="center"><tr><td align="center"><font color="green">Profile updated successfully.</font></td></tr></table>
+{% endif %}
+<table width="500" cellpadding="4" cellspacing="0" border="1" align="center">
+  <tr><td colspan="2" align="center"><b>Edit Profile &mdash; {{ member.first_name }} {{ member.last_name }}</b></td></tr>
+  <tr>
+    <td colspan="2">
+      <form method="POST" action="/member/{{ member.member_id }}/edit">
+        <table cellpadding="2" cellspacing="0" border="0" width="100%">
+          <tr><td>Email:</td><td><input type="text" name="email" value="{{ member.email }}" size="30"></td></tr>
+          <tr><td>Phone:</td><td><input type="text" name="phone" value="{{ member.phone }}" size="20"></td></tr>
+          <tr><td colspan="2" align="center"><input type="submit" value="Save Changes"></td></tr>
+        </table>
+      </form>
+    </td>
+  </tr>
+</table>
+</body>
+</html>

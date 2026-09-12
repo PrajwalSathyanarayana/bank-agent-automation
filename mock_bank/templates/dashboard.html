@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><title>Sunbelt Credit Union - Dashboard</title></head>
+<body>
+{% if show_popup %}
+<div style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);">
+  <table width="320" bgcolor="#ffffff" align="center" style="margin-top:150px;" cellpadding="6" cellspacing="0" border="1">
+    <tr><td align="center"><b>New! Mobile Banking App</b></td></tr>
+    <tr><td align="center">Bank on the go &mdash; download our app today.</td></tr>
+    <tr><td align="center"><input type="button" value="Close" onclick="this.closest('div').style.display='none';"></td></tr>
+  </table>
+</div>
+{% endif %}
+<table width="100%" cellpadding="4" cellspacing="0" border="0">
+  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
+</table>
+<table width="500" cellpadding="4" cellspacing="0" border="1" align="center">
+  <tr><td colspan="2" align="center"><b>Staff Dashboard</b></td></tr>
+  <tr><td>Members Serviced Today:</td><td>0</td></tr>
+  <tr><td>Pending Bill Payments:</td><td>0</td></tr>
+</table>
+</body>
+</html>
