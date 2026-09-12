@@ -133,7 +133,38 @@ def test_member_accounts_omits_savings_when_absent(logged_in_client):
 
 def test_billpay_without_member_selected_redirects_to_search(logged_in_client):
     resp = logged_in_client.get("/billpay")
-    assert resp.headers["Location"] == "/search"
+    assert resp.headers["Location"] == "/search?need_member=1"
+
+
+# --- D028: explain the bill pay redirect, boot-scoped sessions, breadcrumb link ---
+
+def test_search_explains_why_when_sent_from_billpay(logged_in_client):
+    resp = logged_in_client.get("/search?need_member=1")
+    assert b"Select a member before starting a bill payment" in resp.data
+
+
+def test_search_shows_no_notice_normally(logged_in_client):
+    resp = logged_in_client.get("/search")
+    assert b"Select a member before starting a bill payment" not in resp.data
+
+
+def test_session_from_previous_server_boot_is_rejected(app, logged_in_client):
+    app.config["BOOT_ID"] = "simulated-restart"
+    resp = logged_in_client.get("/dashboard", follow_redirects=True)
+    assert b"session has expired" in resp.data
+
+
+def test_root_shows_homepage_for_session_from_previous_boot(app, logged_in_client):
+    app.config["BOOT_ID"] = "simulated-restart"
+    resp = logged_in_client.get("/")
+    assert resp.status_code == 200
+    assert b"Welcome to CoreBank Teller" in resp.data
+    assert b"Sign Off" not in resp.data
+
+
+def test_breadcrumb_home_is_a_link(logged_in_client):
+    resp = logged_in_client.get("/dashboard")
+    assert b'<a href="/">Home</a>' in resp.data
 
 
 def test_billpay_form_renders_with_default_amount(logged_in_client):
