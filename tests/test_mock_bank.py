@@ -194,3 +194,41 @@ def test_billpay_confirm_submit_deducts_balance(logged_in_client):
 def test_billpay_confirm_without_pending_payment_redirects_to_billpay(logged_in_client):
     resp = logged_in_client.get("/billpay/confirm")
     assert resp.headers["Location"] == "/billpay"
+
+
+# --- D027: homepage + sign off ---
+
+def test_root_shows_homepage_with_login_button_when_not_logged_in(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert b"Welcome to CoreBank Teller" in resp.data
+    assert b'action="/login"' in resp.data
+
+
+def test_root_redirects_to_dashboard_when_logged_in(logged_in_client):
+    resp = logged_in_client.get("/")
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/dashboard"
+
+
+def test_logout_clears_session_and_redirects_to_login(logged_in_client):
+    resp = logged_in_client.get("/logout")
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/login?signed_off=1"
+    resp = logged_in_client.get("/dashboard", follow_redirects=True)
+    assert b"session has expired" in resp.data
+
+
+def test_login_page_shows_signed_off_message(client):
+    resp = client.get("/login?signed_off=1")
+    assert b"You have been signed off" in resp.data
+
+
+def test_sign_off_link_hidden_when_not_logged_in(client):
+    resp = client.get("/login")
+    assert b"Sign Off" not in resp.data
+
+
+def test_sign_off_link_shown_when_logged_in(logged_in_client):
+    resp = logged_in_client.get("/dashboard")
+    assert b"Sign Off" in resp.data
