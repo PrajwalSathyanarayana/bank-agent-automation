@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head><title>Sunbelt Credit Union - Bill Pay</title></head>
+<body>
+<table width="100%" cellpadding="4" cellspacing="0" border="0">
+  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
+</table>
+<table width="450" cellpadding="4" cellspacing="0" border="1" align="center">
+  <tr><td colspan="2" align="center"><b>Bill Pay &mdash; {{ member.first_name }} {{ member.last_name }}</b></td></tr>
+  {% if error %}
+  <tr><td colspan="2" align="center"><font color="red">{{ error }}</font></td></tr>
+  {% endif %}
+  <tr>
+    <td colspan="2">
+      <form method="POST" action="/billpay">
+        <table cellpadding="2" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td>Payee:</td>
+            <td>
+              <select name="payee_id">
+                {% for payee in payees %}
+                <option value="{{ payee.payee_id }}">{{ payee.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+          </tr>
+          <tr>
+            <td>Amount:</td>
+            <td><input type="text" name="amount" value="{{ default_amount }}" size="10"></td>
+          </tr>
+          <tr>
+            <td colspan="2" align="center"><input type="submit" value="Continue"></td>
+          </tr>
+        </table>
+      </form>
+    </td>
+  </tr>
+</table>
+</body>
+</html>

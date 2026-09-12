@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head><title>Sunbelt Credit Union - Bill Pay Confirmation</title></head>
+<body>
+<table width="100%" cellpadding="4" cellspacing="0" border="0">
+  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
+</table>
+{% if confirmed %}
+<table width="450" cellpadding="4" cellspacing="0" border="1" align="center">
+  <tr><td align="center"><b>Payment Submitted Successfully</b></td></tr>
+  <tr><td>Payee: {{ payee.name }}</td></tr>
+  <tr><td>Amount Paid: ${{ "%.2f"|format(amount) }}</td></tr>
+  <tr><td>New Checking Balance: ${{ "%.2f"|format(new_balance) }}</td></tr>
+</table>
+{% else %}
+<table width="450" cellpadding="4" cellspacing="0" border="1" align="center">
+  <tr><td colspan="2" align="center"><b>Confirm Payment</b></td></tr>
+  <tr><td>Member:</td><td>{{ member.first_name }} {{ member.last_name }}</td></tr>
+  <tr><td>Payee:</td><td>{{ payee.name }}</td></tr>
+  <tr><td>Amount:</td><td>${{ "%.2f"|format(amount) }}</td></tr>
+  <tr>
+    <td colspan="2" align="center">
+      <form method="POST" action="/billpay/confirm">
+        <input type="submit" value="Confirm Payment">
+      </form>
+      <a href="/billpay">Cancel</a>
+    </td>
+  </tr>
+</table>
+{% endif %}
+</body>
+</html>
