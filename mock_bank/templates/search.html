@@ -1,27 +1,23 @@
-<!DOCTYPE html>
-<html>
-<head><title>Sunbelt Credit Union - Member Search</title></head>
-<body>
-<table width="100%" cellpadding="4" cellspacing="0" border="0">
-  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
-</table>
-<table width="400" cellpadding="4" cellspacing="0" border="0" align="center">
-  <tr><td colspan="2" align="center"><b>Member Search</b></td></tr>
-  <tr>
-    <td colspan="2">
-      <form method="POST" action="/search">
-        <table cellpadding="2" cellspacing="0" border="0" width="100%">
-          <tr>
-            <td>Member ID:</td>
-            <td><input type="text" name="member_id" size="20"></td>
-          </tr>
-          <tr>
-            <td colspan="2" align="center"><input type="submit" value="Search"></td>
-          </tr>
-        </table>
-      </form>
-    </td>
-  </tr>
-</table>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Member Search{% endblock %}
+{% block breadcrumb %}Home &raquo; Member Services &raquo; Member Search{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="panel-title">Member Search</div>
+  <div class="panel-body">
+    <form method="POST" action="/search">
+      <table class="form" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td class="lbl">Member ID:</td>
+          <td><input type="text" name="member_id" size="20"></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td><input type="submit" value="Search"> <input type="reset" value="Clear"></td>
+        </tr>
+      </table>
+    </form>
+    <div class="fineprint">Enter the member's account number. Partial matches are not supported.</div>
+  </div>
+</div>
+{% endblock %}

@@ -1,17 +1,21 @@
-<!DOCTYPE html>
-<html>
-<head><title>Sunbelt Credit Union - Session Expired</title></head>
-<body>
-<table width="400" cellpadding="4" cellspacing="0" border="0" align="center">
+{% extends "base.html" %}
+{% block title %}Session Expired{% endblock %}
+{% block breadcrumb %}Session Expired{% endblock %}
+{% block nav %}{% endblock %}
+{% block main_colspan %}2{% endblock %}
+{% block content %}
+<table width="420" align="center" cellpadding="0" cellspacing="0" border="0" style="margin-top:40px;">
   <tr>
-    <td align="center"><b>Your session has expired.</b></td>
-  </tr>
-  <tr>
-    <td align="center">Please log in again to continue.</td>
-  </tr>
-  <tr>
-    <td align="center"><a href="/login">Return to Login</a></td>
+    <td>
+      <div class="panel">
+        <div class="panel-title">Session Expired</div>
+        <div class="panel-body">
+          <div class="msg-error">Your session has expired.</div>
+          Please log in again to continue.
+          <div class="actions"><a href="/login">Return to Login</a></div>
+        </div>
+      </div>
+    </td>
   </tr>
 </table>
-</body>
-</html>
+{% endblock %}

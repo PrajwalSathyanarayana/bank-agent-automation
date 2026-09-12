@@ -1,23 +1,38 @@
-<!DOCTYPE html>
-<html>
-<head><title>Sunbelt Credit Union - Dashboard</title></head>
-<body>
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block breadcrumb %}Home &raquo; Dashboard{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="panel-title">Staff Dashboard</div>
+  <div class="panel-body">
+    <table class="grid" cellpadding="0" cellspacing="0">
+      <tr><th>Metric</th><th width="80">Today</th></tr>
+      <tr><td>Members Serviced Today</td><td>0</td></tr>
+      <tr class="alt"><td>Pending Bill Payments</td><td>0</td></tr>
+      <tr><td>Open Service Requests</td><td>0</td></tr>
+    </table>
+  </div>
+</div>
+<div class="panel">
+  <div class="panel-title">Branch Announcements</div>
+  <div class="panel-body">
+    <table class="grid" cellpadding="0" cellspacing="0">
+      <tr><th width="80">Date</th><th>Notice</th></tr>
+      <tr><td>09/08</td><td>Quarterly compliance training is due by 09/30.</td></tr>
+      <tr class="alt"><td>09/05</td><td>Bill Pay same-day cutoff moved to 4:00 PM.</td></tr>
+      <tr><td>09/01</td><td>New certificate rates are effective today.</td></tr>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block overlay %}
 {% if show_popup %}
-<div style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);">
-  <table width="320" bgcolor="#ffffff" align="center" style="margin-top:150px;" cellpadding="6" cellspacing="0" border="1">
-    <tr><td align="center"><b>New! Mobile Banking App</b></td></tr>
-    <tr><td align="center">Bank on the go &mdash; download our app today.</td></tr>
-    <tr><td align="center"><input type="button" value="Close" onclick="this.closest('div').style.display='none';"></td></tr>
+<div class="overlay">
+  <table class="promo" cellpadding="0" cellspacing="0" border="0">
+    <tr><td class="panel-title">New! Mobile Banking App</td></tr>
+    <tr><td>Bank on the go &mdash; download our app today.</td></tr>
+    <tr><td><input type="button" value="Close" onclick="this.closest('div').style.display='none';"></td></tr>
   </table>
 </div>
 {% endif %}
-<table width="100%" cellpadding="4" cellspacing="0" border="0">
-  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
-</table>
-<table width="500" cellpadding="4" cellspacing="0" border="1" align="center">
-  <tr><td colspan="2" align="center"><b>Staff Dashboard</b></td></tr>
-  <tr><td>Members Serviced Today:</td><td>0</td></tr>
-  <tr><td>Pending Bill Payments:</td><td>0</td></tr>
-</table>
-</body>
-</html>
+{% endblock %}

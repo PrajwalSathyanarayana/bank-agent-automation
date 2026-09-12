@@ -1,0 +1,154 @@
+/* CoreBank Teller - legacy stylesheet (circa-2006 look, D026).
+   Styling uses generic class names and element selectors only; no ids
+   or test hooks on interactive elements (D016). */
+
+body {
+  margin: 0;
+  font-family: Verdana, Tahoma, Arial, sans-serif;
+  font-size: 12px;
+  background: #d4d0c8;
+  color: #000;
+}
+
+/* base.html uses an HTML 4.01 Transitional doctype without a system id,
+   which puts browsers in quirks mode (as real legacy apps did). In quirks
+   mode tables don't inherit font size from body, so restate it here. */
+table { font-family: Verdana, Tahoma, Arial, sans-serif; font-size: 12px; }
+
+table.shell { width: 100%; border-collapse: collapse; }
+
+/* Header bar */
+td.hdr {
+  background: linear-gradient(#2b4a7a, #1a3057);
+  color: #fff;
+  padding: 6px 10px;
+  border-bottom: 2px solid #0e1f3d;
+}
+.hdr-title { font-family: Georgia, "Times New Roman", serif; font-size: 17px; font-weight: bold; }
+.hdr-sub { font-size: 10px; color: #c8d4e8; }
+.hdr-info { text-align: right; font-size: 10px; color: #e0e6f0; line-height: 15px; }
+
+/* Breadcrumb bar */
+td.crumb {
+  background: #ece9d8;
+  border-bottom: 1px solid #a0a0a0;
+  padding: 3px 10px;
+  font-size: 10px;
+  color: #333;
+}
+
+/* Left navigation */
+td.nav {
+  width: 170px;
+  background: #eef0f4;
+  border-right: 1px solid #8a9ab5;
+  vertical-align: top;
+  padding: 0;
+}
+.navhead {
+  background: #5a7bb0;
+  color: #fff;
+  font-weight: bold;
+  padding: 4px 8px;
+  border-bottom: 1px solid #3b5a8f;
+}
+.navitem a,
+.navitem span {
+  display: block;
+  padding: 4px 12px;
+  border-bottom: 1px dotted #c0c8d8;
+}
+.navitem a { color: #1a3057; text-decoration: none; }
+.navitem a:hover { background: #dce4f2; text-decoration: underline; }
+.navitem.disabled span { color: #9a9a9a; cursor: default; }
+
+/* Main content + status bar */
+td.main { background: #fff; vertical-align: top; padding: 12px 16px; height: 420px; }
+td.status {
+  background: #d4d0c8;
+  border-top: 1px solid #808080;
+  padding: 3px 10px;
+  font-size: 10px;
+  color: #333;
+}
+
+/* Panels */
+.panel { border: 1px solid #7f9db9; margin-bottom: 12px; }
+.panel-title {
+  background: linear-gradient(#e3ebf7, #c6d6ee);
+  border-bottom: 1px solid #7f9db9;
+  padding: 4px 8px;
+  font-weight: bold;
+  color: #1a3057;
+}
+.panel-body { padding: 8px; }
+
+/* Data grids */
+table.grid { border-collapse: collapse; width: 100%; }
+table.grid th {
+  background: #c6d6ee;
+  border: 1px solid #7f9db9;
+  padding: 3px 6px;
+  text-align: left;
+}
+table.grid td { border: 1px solid #b0c0d8; padding: 3px 6px; }
+table.grid tr.alt td { background: #f0f4fa; }
+
+/* Forms */
+table.form td { padding: 3px 6px; }
+table.form td.lbl { text-align: right; font-weight: bold; color: #333; width: 140px; }
+input[type=text], input[type=password], select {
+  font-family: Verdana, Tahoma, sans-serif;
+  font-size: 12px;
+  border: 1px solid #7f9db9;
+  padding: 2px 3px;
+}
+input[type=submit], input[type=button], input[type=reset] {
+  font-family: Verdana, Tahoma, sans-serif;
+  font-size: 12px;
+  background: linear-gradient(#fdfdfd, #d9d9d9);
+  border: 1px solid #707070;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+input[type=submit]:active, input[type=button]:active, input[type=reset]:active {
+  background: linear-gradient(#d9d9d9, #fdfdfd);
+}
+
+/* Messages */
+.msg-error {
+  color: #b00000;
+  background: #fde8e8;
+  border: 1px solid #e0a0a0;
+  padding: 5px 8px;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+.msg-ok {
+  color: #1d6b1d;
+  background: #e8f6e8;
+  border: 1px solid #9ccc9c;
+  padding: 5px 8px;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+.fineprint { margin-top: 8px; font-size: 10px; color: #666; }
+.actions { margin-top: 8px; }
+
+/* Promotional interstitial (D011) - rendered last in <body>, above all content */
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+table.promo {
+  width: 340px;
+  margin: 140px auto 0;
+  background: #fff;
+  border: 2px solid #1a3057;
+}
+table.promo td { padding: 6px 10px; text-align: center; }

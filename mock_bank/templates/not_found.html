@@ -1,13 +1,13 @@
-<!DOCTYPE html>
-<html>
-<head><title>Sunbelt Credit Union - Member Not Found</title></head>
-<body>
-<table width="100%" cellpadding="4" cellspacing="0" border="0">
-  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
-</table>
-<table width="400" cellpadding="4" cellspacing="0" border="1" align="center">
-  <tr><td align="center"><b>No member found with that ID.</b></td></tr>
-  <tr><td align="center"><a href="/search">Try Another Search</a></td></tr>
-</table>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Member Not Found{% endblock %}
+{% block breadcrumb %}Home &raquo; Member Services &raquo; Member Search{% endblock %}
+{% block content %}
+<div class="msg-error">No member found with that ID.</div>
+<div class="panel">
+  <div class="panel-title">Search Result</div>
+  <div class="panel-body">
+    The member number you entered does not match any record on file. Verify the number and try again.
+    <div class="actions"><a href="/search">Try Another Search</a></div>
+  </div>
+</div>
+{% endblock %}

@@ -1,23 +1,24 @@
-<!DOCTYPE html>
-<html>
-<head><title>Sunbelt Credit Union - Member Detail</title></head>
-<body>
-<table width="100%" cellpadding="4" cellspacing="0" border="0">
-  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
-</table>
-<table width="500" cellpadding="4" cellspacing="0" border="1" align="center">
-  <tr><td colspan="2" align="center"><b>Member Detail</b></td></tr>
-  <tr><td>Member ID:</td><td>{{ member.member_id }}</td></tr>
-  <tr><td>Name:</td><td>{{ member.first_name }} {{ member.last_name }}</td></tr>
-  <tr><td>Membership Status:</td><td>{{ member.membership_status }}</td></tr>
-  <tr><td>Primary Account Type:</td><td>{{ primary_account.account_type }}</td></tr>
-  <tr><td>Primary Account Balance:</td><td>${{ "%.2f"|format(primary_account.balance) }}</td></tr>
-  <tr>
-    <td colspan="2" align="center">
+{% extends "base.html" %}
+{% block title %}Member Detail{% endblock %}
+{% block breadcrumb %}Home &raquo; Member Services &raquo; Member Detail{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="panel-title">Member Detail</div>
+  <div class="panel-body">
+    <table class="grid" cellpadding="0" cellspacing="0">
+      <tr><th width="200">Field</th><th>Value</th></tr>
+      <tr><td>Member ID:</td><td>{{ member.member_id }}</td></tr>
+      <tr class="alt"><td>Name:</td><td>{{ member.first_name }} {{ member.last_name }}</td></tr>
+      <tr><td>Member Since:</td><td>{{ member.member_since }}</td></tr>
+      <tr class="alt"><td>Membership Status:</td><td>{{ member.membership_status }}</td></tr>
+      <tr><td>Primary Account Type:</td><td>{{ primary_account.account_type }}</td></tr>
+      <tr class="alt"><td>Primary Account Balance:</td><td>${{ "%.2f"|format(primary_account.balance) }}</td></tr>
+    </table>
+    <div class="actions">
       <a href="/member/{{ member.member_id }}/edit">Edit Profile</a> |
-      <a href="/member/{{ member.member_id }}/accounts">View All Accounts</a>
-    </td>
-  </tr>
-</table>
-</body>
-</html>
+      <a href="/member/{{ member.member_id }}/accounts">View All Accounts</a> |
+      <a href="/billpay">Bill Pay</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

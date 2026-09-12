@@ -1,28 +1,29 @@
-<!DOCTYPE html>
-<html>
-<head><title>Sunbelt Credit Union - Member Accounts</title></head>
-<body>
-<table width="100%" cellpadding="4" cellspacing="0" border="0">
-  <tr><td><a href="/dashboard">Dashboard</a> | <a href="/search">Search Members</a></td></tr>
-</table>
-<table width="600" cellpadding="4" cellspacing="0" border="1" align="center">
-  <tr><td colspan="5" align="center"><b>Accounts &mdash; {{ member.first_name }} {{ member.last_name }}</b></td></tr>
-  <tr>
-    <td><b>Account ID</b></td>
-    <td><b>Type</b></td>
-    <td><b>Balance</b></td>
-    <td><b>Status</b></td>
-    <td><b>Last Transaction</b></td>
-  </tr>
-  {% for account in member.accounts %}
-  <tr>
-    <td>{{ account.account_id }}</td>
-    <td>{{ account.account_type }}{% if account.is_primary %} (Primary){% endif %}</td>
-    <td>${{ "%.2f"|format(account.balance) }}</td>
-    <td>{{ account.status }}</td>
-    <td>{{ account.last_transaction_date }}</td>
-  </tr>
-  {% endfor %}
-</table>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Member Accounts{% endblock %}
+{% block breadcrumb %}Home &raquo; Member Services &raquo; Accounts{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="panel-title">Accounts &mdash; {{ member.first_name }} {{ member.last_name }}</div>
+  <div class="panel-body">
+    <table class="grid" cellpadding="0" cellspacing="0">
+      <tr>
+        <th>Account ID</th>
+        <th>Type</th>
+        <th>Balance</th>
+        <th>Status</th>
+        <th>Last Transaction</th>
+      </tr>
+      {% for account in member.accounts %}
+      <tr{% if loop.index is even %} class="alt"{% endif %}>
+        <td>{{ account.account_id }}</td>
+        <td>{{ account.account_type }}{% if account.is_primary %} (Primary){% endif %}</td>
+        <td>${{ "%.2f"|format(account.balance) }}</td>
+        <td>{{ account.status }}</td>
+        <td>{{ account.last_transaction_date }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="actions"><a href="/member/{{ member.member_id }}">Back to Member Detail</a></div>
+  </div>
+</div>
+{% endblock %}

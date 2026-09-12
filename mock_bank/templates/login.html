@@ -1,35 +1,36 @@
-<!DOCTYPE html>
-<html>
-<head><title>Sunbelt Credit Union - Staff Portal Login</title></head>
-<body>
-<table width="400" cellpadding="4" cellspacing="0" border="0" align="center">
+{% extends "base.html" %}
+{% block title %}Sign On{% endblock %}
+{% block breadcrumb %}Sign On{% endblock %}
+{% block nav %}{% endblock %}
+{% block main_colspan %}2{% endblock %}
+{% block content %}
+<table width="380" align="center" cellpadding="0" cellspacing="0" border="0" style="margin-top:40px;">
   <tr>
-    <td colspan="2" align="center"><b>Sunbelt Credit Union &mdash; Staff Portal</b></td>
-  </tr>
-  {% if error %}
-  <tr>
-    <td colspan="2" align="center"><font color="red">{{ error }}</font></td>
-  </tr>
-  {% endif %}
-  <tr>
-    <td colspan="2">
-      <form method="POST" action="/login">
-        <table cellpadding="2" cellspacing="0" border="0" width="100%">
-          <tr>
-            <td>Username:</td>
-            <td><input type="text" name="username" size="20"></td>
-          </tr>
-          <tr>
-            <td>Password:</td>
-            <td><input type="password" name="password" size="20"></td>
-          </tr>
-          <tr>
-            <td colspan="2" align="center"><input type="submit" value="Log In"></td>
-          </tr>
-        </table>
-      </form>
+    <td>
+      <div class="panel">
+        <div class="panel-title">Staff Portal &mdash; Sign On</div>
+        <div class="panel-body">
+          {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
+          <form method="POST" action="/login">
+            <table class="form" cellpadding="0" cellspacing="0" border="0" width="100%">
+              <tr>
+                <td class="lbl">Username:</td>
+                <td><input type="text" name="username" size="20"></td>
+              </tr>
+              <tr>
+                <td class="lbl">Password:</td>
+                <td><input type="password" name="password" size="20"></td>
+              </tr>
+              <tr>
+                <td></td>
+                <td><input type="submit" value="Log In"></td>
+              </tr>
+            </table>
+          </form>
+          <div class="fineprint">Authorized personnel only. All activity is monitored and logged.</div>
+        </div>
+      </div>
     </td>
   </tr>
 </table>
-</body>
-</html>
+{% endblock %}
