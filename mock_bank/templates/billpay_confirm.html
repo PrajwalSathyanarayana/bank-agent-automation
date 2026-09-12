@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Bill Pay Confirmation{% endblock %}
-{% block breadcrumb %}Home &raquo; Transactions &raquo; Bill Pay &raquo; Confirm{% endblock %}
+{% block breadcrumb %}<a href="/">Home</a> &raquo; Transactions &raquo; <a href="/billpay">Bill Pay</a> &raquo; Confirm{% endblock %}
 {% block content %}
 {% if confirmed %}
 <div class="msg-ok">Payment Submitted Successfully</div>

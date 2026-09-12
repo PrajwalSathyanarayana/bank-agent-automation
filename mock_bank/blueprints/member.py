@@ -28,7 +28,8 @@ def dashboard():
 @member_bp.route("/search", methods=["GET"])
 @login_required
 def search():
-    return render_template("search.html")
+    notice = "Select a member before starting a bill payment." if request.args.get("need_member") else None
+    return render_template("search.html", notice=notice)
 
 
 @member_bp.route("/search", methods=["POST"])

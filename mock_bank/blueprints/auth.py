@@ -1,11 +1,26 @@
 from functools import wraps
 
-from flask import Blueprint, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
 
 auth_bp = Blueprint("auth", __name__)
 
 VALID_USERNAME = "admin"
 VALID_PASSWORD = "admin123"
+
+
+def has_valid_session() -> bool:
+    """A session counts only if this server run issued it (D028).
+
+    The cookie is signed with the SECRET_KEY from .env, so it stays
+    cryptographically valid across restarts; the boot ID is what ties it
+    to one server lifetime, the way legacy in-memory sessions behaved.
+    """
+    return bool(session.get("logged_in")) and session.get("boot_id") == current_app.config["BOOT_ID"]
+
+
+@auth_bp.app_context_processor
+def inject_session_state():
+    return {"signed_in": has_valid_session()}
 
 
 def login_required(view_func):
@@ -17,7 +32,7 @@ def login_required(view_func):
     """
     @wraps(view_func)
     def wrapped(*args, **kwargs):
-        if not session.get("logged_in"):
+        if not has_valid_session():
             return redirect(url_for("auth.session_timeout"))
         return view_func(*args, **kwargs)
     return wrapped
@@ -25,7 +40,7 @@ def login_required(view_func):
 
 @auth_bp.route("/", methods=["GET"])
 def home():
-    if session.get("logged_in"):
+    if has_valid_session():
         return redirect(url_for("member.dashboard"))
     return render_template("home.html")
 
@@ -44,6 +59,7 @@ def login_submit():
     if username == VALID_USERNAME and password == VALID_PASSWORD:
         session["logged_in"] = True
         session["username"] = username
+        session["boot_id"] = current_app.config["BOOT_ID"]
         return redirect(url_for("member.dashboard"))
 
     return render_template("login.html", error="Invalid username or password.", message=None), 200

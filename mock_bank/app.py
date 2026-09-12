@@ -1,4 +1,5 @@
 import json
+import secrets
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -27,6 +28,8 @@ def load_member_data() -> dict:
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = env.mock_bank_secret_key
+    # New value every startup; sessions from a previous run are rejected (D028).
+    app.config["BOOT_ID"] = secrets.token_hex(8)
     app.config["MEMBER_DATA"] = load_member_data()
 
     app.register_blueprint(auth_bp)

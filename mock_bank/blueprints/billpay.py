@@ -34,7 +34,7 @@ def _primary_checking_account(member):
 def billpay():
     member_id = session.get("current_member_id")
     if member_id is None:
-        return redirect(url_for("member.search"))
+        return redirect(url_for("member.search", need_member=1))
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
@@ -53,7 +53,7 @@ def billpay():
 def billpay_submit():
     member_id = session.get("current_member_id")
     if member_id is None:
-        return redirect(url_for("member.search"))
+        return redirect(url_for("member.search", need_member=1))
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))

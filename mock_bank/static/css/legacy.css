@@ -133,6 +133,14 @@ input[type=submit]:active, input[type=button]:active, input[type=reset]:active {
   margin-bottom: 8px;
   font-weight: bold;
 }
+.msg-info {
+  color: #1a3057;
+  background: #e8eef8;
+  border: 1px solid #9db3d6;
+  padding: 5px 8px;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
 .msg-warn {
   color: #6b4e00;
   background: #fff6d6;

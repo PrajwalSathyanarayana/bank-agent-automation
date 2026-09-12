@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Member Search{% endblock %}
-{% block breadcrumb %}Home &raquo; Member Services &raquo; Member Search{% endblock %}
+{% block breadcrumb %}<a href="/">Home</a> &raquo; Member Services &raquo; Member Search{% endblock %}
 {% block content %}
+{% if notice %}<div class="msg-info">{{ notice }}</div>{% endif %}
 <div class="panel">
   <div class="panel-title">Member Search</div>
   <div class="panel-body">
