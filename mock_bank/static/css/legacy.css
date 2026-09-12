@@ -27,6 +27,7 @@ td.hdr {
 .hdr-title { font-family: Georgia, "Times New Roman", serif; font-size: 17px; font-weight: bold; }
 .hdr-sub { font-size: 10px; color: #c8d4e8; }
 .hdr-info { text-align: right; font-size: 10px; color: #e0e6f0; line-height: 15px; }
+.hdr-info a { color: #fff; font-weight: bold; }
 
 /* Breadcrumb bar */
 td.crumb {
@@ -131,6 +132,13 @@ input[type=submit]:active, input[type=button]:active, input[type=reset]:active {
   padding: 5px 8px;
   margin-bottom: 8px;
   font-weight: bold;
+}
+.msg-warn {
+  color: #6b4e00;
+  background: #fff6d6;
+  border: 1px solid #e0c870;
+  padding: 5px 8px;
+  font-size: 10px;
 }
 .fineprint { margin-top: 8px; font-size: 10px; color: #666; }
 .actions { margin-top: 8px; }

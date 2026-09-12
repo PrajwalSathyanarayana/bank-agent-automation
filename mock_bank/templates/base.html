@@ -17,7 +17,7 @@
           </td>
           <td class="hdr-info">
             {% if session.get('logged_in') %}
-            Teller: {{ session.get('username') }} &nbsp;|&nbsp; Branch 014 &mdash; Mesa Main<br>
+            Teller: {{ session.get('username') }} &nbsp;|&nbsp; Branch 014 &mdash; Mesa Main &nbsp;|&nbsp; <a href="/logout">Sign Off</a><br>
             <span class="session-timer">&nbsp;</span>
             {% else %}
             Branch 014 &mdash; Mesa Main

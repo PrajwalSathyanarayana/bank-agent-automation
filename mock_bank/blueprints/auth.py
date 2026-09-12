@@ -23,9 +23,17 @@ def login_required(view_func):
     return wrapped
 
 
+@auth_bp.route("/", methods=["GET"])
+def home():
+    if session.get("logged_in"):
+        return redirect(url_for("member.dashboard"))
+    return render_template("home.html")
+
+
 @auth_bp.route("/login", methods=["GET"])
 def login():
-    return render_template("login.html", error=None)
+    message = "You have been signed off." if request.args.get("signed_off") else None
+    return render_template("login.html", error=None, message=message)
 
 
 @auth_bp.route("/login", methods=["POST"])
@@ -38,7 +46,15 @@ def login_submit():
         session["username"] = username
         return redirect(url_for("member.dashboard"))
 
-    return render_template("login.html", error="Invalid username or password."), 200
+    return render_template("login.html", error="Invalid username or password.", message=None), 200
+
+
+@auth_bp.route("/logout", methods=["GET"])
+def logout():
+    # A plain GET link, as legacy portals did (D027). A modern app would
+    # use POST so another site can't silently sign the user out.
+    session.clear()
+    return redirect(url_for("auth.login", signed_off=1))
 
 
 @auth_bp.route("/session-timeout", methods=["GET"])

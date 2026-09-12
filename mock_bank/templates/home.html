@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Welcome{% endblock %}
+{% block breadcrumb %}Home{% endblock %}
+{% block nav %}{% endblock %}
+{% block main_colspan %}2{% endblock %}
+{% block content %}
+<table width="560" align="center" cellpadding="0" cellspacing="0" border="0" style="margin-top:30px;">
+  <tr>
+    <td>
+      <div class="panel">
+        <div class="panel-title">Welcome to CoreBank Teller</div>
+        <div class="panel-body">
+          CoreBank Teller is the member servicing system for Sunbelt Credit Union branch staff.
+          Sign on with your staff credentials to look up members, update member profiles,
+          and process bill payments.
+          <form method="GET" action="/login" class="actions">
+            <input type="submit" value="Log In">
+          </form>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">System Notices</div>
+        <div class="panel-body">
+          <table class="grid" cellpadding="0" cellspacing="0">
+            <tr><th width="80">Date</th><th>Notice</th></tr>
+            <tr><td>09/14</td><td>Scheduled maintenance Sunday 2:00&ndash;4:00 AM. CoreBank Teller will be unavailable.</td></tr>
+            <tr class="alt"><td>09/02</td><td>Password resets now require a call to the IT Help Desk (ext. 4357).</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="msg-warn">
+        WARNING: This system is for authorized Sunbelt Credit Union use only. All activity is
+        monitored and logged. Unauthorized access is prohibited.
+      </div>
+    </td>
+  </tr>
+</table>
+{% endblock %}

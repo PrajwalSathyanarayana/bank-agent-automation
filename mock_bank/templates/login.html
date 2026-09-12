@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Sign On{% endblock %}
-{% block breadcrumb %}Sign On{% endblock %}
+{% block breadcrumb %}<a href="/">Home</a> &raquo; Sign On{% endblock %}
 {% block nav %}{% endblock %}
 {% block main_colspan %}2{% endblock %}
 {% block content %}
@@ -10,6 +10,7 @@
       <div class="panel">
         <div class="panel-title">Staff Portal &mdash; Sign On</div>
         <div class="panel-body">
+          {% if message %}<div class="msg-ok">{{ message }}</div>{% endif %}
           {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
           <form method="POST" action="/login">
             <table class="form" cellpadding="0" cellspacing="0" border="0" width="100%">

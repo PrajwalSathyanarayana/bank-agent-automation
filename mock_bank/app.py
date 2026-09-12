@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Running this as a plain script (python mock_bank/app.py) only puts
 # this file's own directory on sys.path, not the repo root. Add the
@@ -37,4 +38,7 @@ def create_app() -> Flask:
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Bind to MOCK_BANK_BASE_URL's host/port so the printed link, the
+    # allowlist's permitted domain (D021), and the config always agree.
+    base = urlparse(env.mock_bank_base_url)
+    app.run(host=base.hostname, port=base.port or 5000, debug=True)
