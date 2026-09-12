@@ -1,10 +1,10 @@
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
 import uuid
 import re
-from .step_schema import Step
+from .step_schema import ActionType, Step
 
 
 class ParamType(str, Enum):
@@ -20,6 +20,12 @@ class InputParamDefinition(BaseModel):
     required: bool = True
     description: str = Field(min_length=1)
     example_value: Optional[str] = None
+
+
+class OutputParamDefinition(BaseModel):
+    key: str = Field(min_length=1)
+    type: ParamType
+    description: str = Field(min_length=1)
 
 
 class GlobalAssertionType(str, Enum):
@@ -85,8 +91,44 @@ class Artifact(BaseModel):
     input_parameters: list[InputParamDefinition] = Field(
         default_factory=list
     )
+    output_definitions: list[OutputParamDefinition] = Field(
+        default_factory=list,
+        description="Typed outputs this capability returns to the calling agent"
+    )
     steps: list[Step] = Field(min_length=1)
     global_assertions: list[GlobalAssertion] = Field(
         default_factory=list,
         description="Terminal assertions verified after all steps complete"
     )
+
+    @model_validator(mode="after")
+    def validate_output_definitions_match_extract_steps(self) -> "Artifact":
+        declared_keys = [o.key for o in self.output_definitions]
+        if len(declared_keys) != len(set(declared_keys)):
+            raise ValueError("output_definitions keys must be unique")
+
+        extract_keys = [
+            s.output_key for s in self.steps if s.action == ActionType.EXTRACT_TEXT
+        ]
+        if len(extract_keys) != len(set(extract_keys)):
+            raise ValueError(
+                "Each declared output must be produced by exactly one EXTRACT_TEXT step "
+                "(duplicate output_key found across steps)"
+            )
+
+        declared_set = set(declared_keys)
+        extract_set = set(extract_keys)
+
+        orphan_declarations = declared_set - extract_set
+        if orphan_declarations:
+            raise ValueError(
+                f"output_definitions declared but never produced by a step: {orphan_declarations}"
+            )
+
+        orphan_extractions = extract_set - declared_set
+        if orphan_extractions:
+            raise ValueError(
+                f"EXTRACT_TEXT step(s) reference undeclared output_key: {orphan_extractions}"
+            )
+
+        return self

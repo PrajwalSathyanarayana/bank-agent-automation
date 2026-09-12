@@ -1,7 +1,6 @@
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
-from datetime import datetime
+from pydantic import BaseModel, Field, model_validator
 import uuid
 
 
@@ -20,6 +19,7 @@ class ActionType(str, Enum):
     WAIT_FOR_ELEMENT = "wait_for_element"
     ASSERT_VISIBLE = "assert_visible"
     ASSERT_TEXT = "assert_text"
+    EXTRACT_TEXT = "extract_text"
 
 
 class LocatorType(str, Enum):
@@ -79,3 +79,16 @@ class Step(BaseModel):
     input_value: Optional[str] = None
     checkpoints: list[StepCheckpoint] = Field(default_factory=list)
     retry_budget: RetryBudget = Field(default_factory=RetryBudget)
+    output_key: Optional[str] = Field(
+        default=None,
+        description="Matches a key in the parent Artifact's output_definitions. "
+        "Required if and only if action is EXTRACT_TEXT.",
+    )
+
+    @model_validator(mode="after")
+    def validate_output_key_matches_extract_text(self) -> "Step":
+        if self.action == ActionType.EXTRACT_TEXT and not self.output_key:
+            raise ValueError("output_key is required when action is EXTRACT_TEXT")
+        if self.action != ActionType.EXTRACT_TEXT and self.output_key:
+            raise ValueError("output_key is only valid when action is EXTRACT_TEXT")
+        return self
