@@ -54,7 +54,7 @@ _MIN_QUOTED = 8
 _TEXT_INPUT_TYPES = {"", "text", "email", "search", "tel", "url", "number"}
 _BUTTON_INPUT_TYPES = {"submit", "button", "reset", "image"}
 _ROLE_KINDS = {"button": "button", "link": "link", "menuitem": "menu item"}
-_ACTION_KINDS = {"link", "button", "menu item", "clickable cell", "clickable area"}
+ACTION_KINDS = {"link", "button", "menu item", "clickable cell", "clickable area"}
 
 # How each label source is worded, so the model can tell a real label from a guessed one.
 _LABEL_WORDING = {
@@ -200,7 +200,7 @@ def describe(facts: ElementFacts) -> str:
     # Each part is fixed wording plus, optionally, page text to be quoted after it.
     parts: list[tuple[str, Optional[str]]] = []
 
-    if kind in _ACTION_KINDS and facts.text:
+    if kind in ACTION_KINDS and facts.text:
         parts.append((f"{kind} ", facts.text))
         # A real accessible name that says something else is shown too, e.g. which of
         # many "Edit" links this is. Guessed labels are never added next to visible text.

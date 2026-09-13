@@ -16,6 +16,7 @@ artifacts/
 CLAUDE.md
 ARCHITECTURE.md
 DECISIONS.md
+decisions/
 PROGRESS.md
 
 # Playwright

@@ -8,9 +8,25 @@ import pytest
 from PIL import Image, ImageFont
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import expect
+from pydantic import SecretStr
 
 from src.config.env import env
 from src.config.settings import settings
+from src.discovery.locators import (
+    Candidate,
+    NoProvenLocator,
+    Rejection,
+    RunValues,
+    Verdict,
+    build_candidates,
+    derive_locators,
+    generate_candidates,
+    number_pattern,
+    prove,
+    scan,
+)
+from src.locating.resolver import resolve
+from src.types.step_schema import Locator, LocatorType
 from src.discovery.perception import (
     _COLLECTOR_SOURCE,
     _TAG_FONT,
@@ -915,3 +931,335 @@ async def test_releasing_after_the_page_has_moved_on_is_harmless(page):
     await observation.release()
     with pytest.raises(ObservationReleased):
         observation.element(1)
+
+
+# --- locators: generating candidates ---
+
+def _parts(tag="a", input_type="", name=None, value=None, href=None, text="", scopes=()):
+    # Raw parts as the in-page script returns them, with one full-page position path.
+    return {
+        "tag": tag, "type": input_type, "name": name, "value": value, "href": href, "text": text,
+        "scopes": [{"selector": selector, "token": token} for selector, token in scopes],
+        "positions": [{"path": f"html > body:nth-of-type(1) > {tag}:nth-of-type(1)", "token": None}],
+    }
+
+
+def _kinds(candidates) -> list[str]:
+    return [candidate.kind for candidate in candidates]
+
+
+@pytest.mark.anyio
+async def test_form_field_candidates_come_in_the_legacy_aware_order(page):
+    await page.goto("/login")
+    observation = await observe(page)
+    username_box = next(element for element in observation.elements if element.facts.label == "Username:")
+    kinds = _kinds(await generate_candidates(username_box))
+    assert kinds[:2] == ["name", "label"]
+    assert set(kinds[2:]) == {"scoped", "position"}
+    first_position = kinds.index("position")
+    assert all(kind == "position" for kind in kinds[first_position:])
+
+
+def test_link_text_comes_before_its_address():
+    facts = _facts("a", text="View All Accounts")
+    parts = _parts(href="/member/10234/accounts", text="View All Accounts")
+    assert _kinds(build_candidates(facts, parts)) == ["text", "address", "position"]
+
+
+def test_button_value_is_its_text_and_a_selector_only_when_scoped():
+    facts = _facts("input", input_type="submit", text="Log In")
+    parts = _parts(tag="input", input_type="submit", value="Log In", scopes=[("table.form", "form")])
+    assert [(candidate.kind, candidate.value) for candidate in build_candidates(facts, parts)] == [
+        ("text", "Log In"),
+        ("scoped", 'table.form input[type="submit"][value="Log In"]'),
+        ("position", "html > body:nth-of-type(1) > input:nth-of-type(1)"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "href",
+    [pytest.param("#", id="hash"), pytest.param("javascript:void(0)", id="javascript"),
+     pytest.param("   ", id="blank")],
+)
+def test_link_that_goes_nowhere_gets_no_address_candidate(href):
+    candidates = build_candidates(_facts("a", text="Go"), _parts(href=href, text="Go"))
+    assert "address" not in _kinds(candidates)
+
+
+@pytest.mark.parametrize(
+    "label, expected",
+    [
+        pytest.param('Payee "A":', "='Payee \"A\":']", id="double quote inside: single-quoted"),
+        pytest.param("Payee's name:", "=\"Payee's name:\"]", id="single quote inside: double-quoted"),
+        pytest.param("It's \"x\":", None, id="both quotes: no label candidate"),
+    ],
+)
+def test_label_xpath_quotes_what_it_can_and_skips_the_rest(label, expected):
+    facts = _facts("input", input_type="text", label=label, label_source="left label")
+    candidates = build_candidates(facts, _parts(tag="input", input_type="text"))
+    labels = [candidate.value for candidate in candidates if candidate.kind == "label"]
+    if expected is None:
+        assert labels == []
+    else:
+        assert len(labels) == 1 and expected in labels[0]
+
+
+@pytest.mark.parametrize(
+    "source, listed",
+    [pytest.param("accessible name", True, id="real accessible name"),
+     pytest.param("left label", False, id="left label"),
+     pytest.param("placeholder", False, id="placeholder")],
+)
+def test_accessible_name_candidate_only_for_a_real_accessible_name(source, listed):
+    facts = _facts("input", input_type="text", label="Member ID", label_source=source)
+    candidates = build_candidates(facts, _parts(tag="input", input_type="text"))
+    assert ("accessible name" in _kinds(candidates)) is listed
+
+
+@pytest.mark.anyio
+async def test_position_paths_start_at_the_nearest_unique_container(page):
+    body = ('<div class="row"><a href="#">One</a></div>'
+            '<div class="row"><div class="box"><a id="t" href="#">Two</a></div></div>')
+    element = await _element_with_id(await _observe_html(page, body), "t")
+    paths = [candidate.value for candidate in await generate_candidates(element) if candidate.kind == "position"]
+    assert paths[0] == "div.box > a:nth-of-type(1)"
+    assert paths[-1].startswith("html > ")
+    assert not any(path.startswith("div.row") for path in paths)  # on the page twice, so never an anchor
+
+
+# --- locators: the data scan ---
+
+LOCATOR_RUN = RunValues(
+    text_inputs={"member_id": "10234", "payee_name": "Sunbelt Electric Co"},
+    number_inputs={"amount": 50.0},
+    username="admin",
+    secrets={"bank_password": SecretStr(FAKE_PASSWORD)},
+)
+
+
+def _text_candidate(text) -> Candidate:
+    return Candidate("text", LocatorType.TEXT_CONTENT, text, data=(text,))
+
+
+def _address_candidate(address) -> Candidate:
+    return Candidate("address", LocatorType.CSS, "", address=address)
+
+
+@pytest.mark.parametrize(
+    "address, stored",
+    [
+        pytest.param("/member/10234/accounts", 'a[href="/member/{member_id}/accounts"]',
+                     id="whole segment becomes a placeholder"),
+        pytest.param("/member/view?id=10234", None, id="query parameter is discarded"),
+        pytest.param("/member/10234x/accounts", None, id="part of a segment is discarded"),
+    ],
+)
+def test_input_in_an_address_becomes_a_placeholder_only_as_a_whole_segment(address, stored):
+    assert scan(_address_candidate(address), LOCATOR_RUN).stored_value == stored
+
+
+def test_segment_equal_to_two_inputs_is_discarded():
+    run = RunValues(text_inputs={"member_id": "10234", "account_id": "10234"})
+    outcome = scan(_address_candidate("/member/10234/accounts"), run)
+    assert outcome.stored_value is None and "two inputs" in outcome.reason
+
+
+def test_text_input_anywhere_in_any_case_discards_the_candidate():
+    outcome = scan(_text_candidate("Pay SUNBELT ELECTRIC CO"), LOCATOR_RUN)
+    assert outcome.stored_value is None and "payee_name" in outcome.reason
+
+
+@pytest.mark.parametrize(
+    "number, text, matches",
+    [
+        pytest.param(50.0, "Pay $50.00", True, id="50 as $50.00"),
+        pytest.param(50.0, "page 50", True, id="50 as 50"),
+        pytest.param(50.0, "50.0 due", True, id="50 as 50.0"),
+        pytest.param(1240.5, "Balance 1,240.50", True, id="thousands separator"),
+        pytest.param(50.0, "Top 150", False, id="not inside 150"),
+        pytest.param(50.0, "50.75", False, id="not inside 50.75"),
+        pytest.param(50.75, "50.8", False, id="never rounded"),
+    ],
+)
+def test_number_is_matched_in_its_common_forms_as_a_whole_number(number, text, matches):
+    assert bool(number_pattern(number).search(text)) is matches
+
+
+@pytest.mark.parametrize(
+    "candidate, kept",
+    [
+        pytest.param(_address_candidate("/teller/Admin/profile"), False, id="a whole word in any case"),
+        pytest.param(_text_candidate("Administration"), True, id="not inside a longer word"),
+    ],
+)
+def test_username_is_matched_as_a_whole_word(candidate, kept):
+    assert (scan(candidate, LOCATOR_RUN).stored_value is not None) is kept
+
+
+def test_secret_discards_the_candidate_and_is_named_never_shown():
+    outcome = scan(_text_candidate(f"token {FAKE_PASSWORD}"), LOCATOR_RUN)
+    assert outcome.stored_value is None
+    assert outcome.secret == "bank_password"
+    assert FAKE_PASSWORD not in repr(outcome)
+
+
+def test_selector_structure_is_never_scanned():
+    # The 50 in nth-of-type(50) is not an amount of 50.
+    candidate = Candidate("position", LocatorType.CSS, "div.actions > a:nth-of-type(50)", data=("actions",))
+    assert scan(candidate, LOCATOR_RUN).stored_value == "div.actions > a:nth-of-type(50)"
+
+
+@pytest.mark.parametrize(
+    "candidate, stored",
+    [
+        pytest.param(_text_candidate("Braces {x}"), "Braces {{x}}", id="text"),
+        pytest.param(_address_candidate("/p/{x}/10234"), 'a[href="/p/{{x}}/{member_id}"]',
+                     id="address beside a placeholder"),
+    ],
+)
+def test_literal_braces_are_doubled(candidate, stored):
+    assert scan(candidate, LOCATOR_RUN).stored_value == stored
+
+
+# --- locators: the proof ---
+
+PROOF_PAGE = ('<div class="nav"><a id="t" href="/billpay">Bill Pay</a></div>'
+              '<div class="actions"><a id="other" href="/billpay">Bill Pay</a></div>')
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "locator, verdict",
+    [
+        pytest.param(Locator(type=LocatorType.CSS, value='div.nav a[href="/billpay"]', priority=0),
+                     Verdict.PROVEN, id="proven"),
+        pytest.param(Locator(type=LocatorType.TEXT_CONTENT, value="Bill Pay", priority=0),
+                     Verdict.SEVERAL, id="several"),
+        pytest.param(Locator(type=LocatorType.CSS, value='a[href="/nowhere"]', priority=0),
+                     Verdict.NO_MATCH, id="no match"),
+        pytest.param(Locator(type=LocatorType.CSS, value="div.actions a", priority=0),
+                     Verdict.OTHER_ELEMENT, id="other element"),
+        pytest.param(Locator(type=LocatorType.CSS, value='a[href="/{member_id}"]', priority=0),
+                     Verdict.UNFILLABLE, id="unfillable"),
+    ],
+)
+async def test_proof_verdicts(page, locator, verdict):
+    await page.set_content(f"{QUIRKS_DOCTYPE}<html><body>{PROOF_PAGE}</body></html>")
+    target = await page.query_selector("#t")
+    assert await prove(page, target, locator, {}) is verdict
+
+
+@pytest.mark.anyio
+async def test_hidden_duplicate_counts_because_replay_would_see_it(page):
+    await page.set_content(f'{QUIRKS_DOCTYPE}<html><body><a id="t" href="/x">Go</a>'
+                           '<a href="/x" style="display:none">Go</a></body></html>')
+    target = await page.query_selector("#t")
+    locator = Locator(type=LocatorType.CSS, value='a[href="/x"]', priority=0)
+    assert await prove(page, target, locator, {}) is Verdict.SEVERAL
+
+
+# --- locators: the whole pipeline ---
+
+def _bank_run(member_id="10234") -> RunValues:
+    return RunValues(
+        text_inputs={"member_id": member_id, "payee_name": "Sunbelt Electric Co"},
+        number_inputs={"amount": 50.0},
+        username=env.mock_bank_username,
+        secrets={"bank_password": env.mock_bank_password},
+    )
+
+
+@pytest.mark.anyio
+async def test_username_box_gets_name_label_and_position(page):
+    await page.goto("/login")
+    observation = await observe(page)
+    username_box = next(element for element in observation.elements if element.facts.label == "Username:")
+    derived = await derive_locators(page, username_box, _bank_run())
+    assert derived.kinds == ["name", "label", "position"]
+    assert [locator.priority for locator in derived.locators] == [0, 1, 2]
+    assert derived.locators[0].value == 'input[name="username"]'
+    assert not derived.weak
+
+
+@pytest.mark.anyio
+async def test_each_bill_pay_link_gets_three_locators_that_never_find_the_other(page, dashboard_popup):
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/10234")
+    observation = await observe(page)
+    first, second = [element for element in observation.elements if element.facts.text == "Bill Pay"]
+    run = _bank_run()
+    for element, other in ((first, second), (second, first)):
+        derived = await derive_locators(page, element, run)
+        assert len(derived.locators) == 3
+        assert derived.kinds[0] == "scoped"
+        assert Rejection("text", Verdict.SEVERAL.value) in derived.rejected
+        assert Rejection("address", Verdict.SEVERAL.value) in derived.rejected
+        for locator in derived.locators:
+            assert await prove(page, other.handle, locator, run.text_inputs) is Verdict.OTHER_ELEMENT
+
+
+@pytest.mark.anyio
+async def test_second_pass_fills_the_third_slot_with_a_set_aside_variant(page):
+    await page.goto("/login")
+    observation = await observe(page)
+    log_in = next(element for element in observation.elements if element.facts.text == "Log In")
+    derived = await derive_locators(page, log_in, _bank_run())
+    assert derived.kinds == ["text", "position", "scoped"]
+    assert derived.locators[2].value == 'table.form input[type="submit"][value="Log In"]'
+
+
+@pytest.mark.anyio
+async def test_only_a_position_locator_is_flagged_weak(page):
+    body = (f'<table><tr><td>Checking</td><td>$1,240.00</td><td><a href="#" id="t">'
+            f'<img src="{PIXEL}" width="16" height="16"></a></td></tr></table>')
+    element = await _element_with_id(await _observe_html(page, body), "t")
+    derived = await derive_locators(page, element, _bank_run())
+    assert derived.kinds == ["position"]
+    assert derived.weak
+
+
+@pytest.mark.anyio
+async def test_secret_on_the_page_is_reported_by_name_and_never_shown(page):
+    run = RunValues(secrets={"bank_password": SecretStr(FAKE_PASSWORD)})
+    body = f'<a href="/reset?token={FAKE_PASSWORD}" id="t">Reset</a>'
+    element = await _element_with_id(await _observe_html(page, body), "t")
+    derived = await derive_locators(page, element, run)
+    assert derived.secrets_found == ["bank_password"]
+    assert derived.kinds[0] == "text"  # the element is still recorded, without the secret
+    assert FAKE_PASSWORD not in repr(derived)
+
+
+@pytest.mark.anyio
+async def test_stored_locators_find_the_same_link_for_another_member(page, dashboard_popup):
+    # The end-to-end check that no member data is baked into a saved locator.
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/10234")
+    observation = await observe(page)
+    view_all = next(element for element in observation.elements if element.facts.text == "View All Accounts")
+    derived = await derive_locators(page, view_all, _bank_run("10234"))
+    assert 'a[href="/member/{member_id}/accounts"]' in [locator.value for locator in derived.locators]
+    await page.goto("/member/40412")
+    for locator in derived.locators:
+        found = resolve(page, locator, {"member_id": "40412"})
+        hrefs = await found.evaluate_all("elements => elements.map(element => element.getAttribute('href'))")
+        assert hrefs == ["/member/40412/accounts"], locator.value
+
+
+@pytest.mark.anyio
+async def test_element_gone_before_deriving_raises(page):
+    element = await _element_with_id(await _observe_html(page, '<a id="t" href="/x">Go</a>'), "t")
+    await page.evaluate("document.getElementById('t').remove()")
+    with pytest.raises(NoProvenLocator):
+        await derive_locators(page, element, RunValues())
+
+
+@pytest.mark.anyio
+async def test_same_page_derives_the_same_locators_twice(page):
+    await page.goto("/login")
+    observation = await observe(page)
+    username_box = next(element for element in observation.elements if element.facts.label == "Username:")
+    assert await derive_locators(page, username_box, _bank_run()) == await derive_locators(
+        page, username_box, _bank_run()
+    )
