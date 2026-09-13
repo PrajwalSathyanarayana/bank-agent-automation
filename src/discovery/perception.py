@@ -1,14 +1,21 @@
 """What the discovery model sees each step: a screenshot plus a numbered list of elements."""
 import json
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Iterable, Optional
 
-from playwright.async_api import ElementHandle
+from playwright.async_api import ElementHandle, JSHandle, Page
+
+from src.config.settings import settings
+
+# The in-page fact collector, read once at import so a missing file fails at start-up.
+_COLLECTOR_SOURCE = Path(__file__).with_name("collect_elements.js").read_text(encoding="utf-8")
 
 DESCRIPTION_MAX = 80
 OPTIONS_MAX = 10
 OPTION_MAX = 40
 OUTSIDE_MARKER = " (outside the visible area)"
+NO_ELEMENTS = "No interactive elements found on this page."
 _MIN_QUOTED = 8
 
 _TEXT_INPUT_TYPES = {"", "text", "email", "search", "tel", "url", "number"}
@@ -76,9 +83,10 @@ class Observation:
     url: str
     title: str
     screenshot: bytes
-    marked_screenshot: bytes
     elements: list[PageElement]
     omitted_count: int = 0
+    # The copy with numbered boxes drawn on it, which the model receives; None until drawn.
+    marked_screenshot: Optional[bytes] = None
 
     def element(self, number: int) -> PageElement:
         for element in self.elements:
@@ -87,6 +95,8 @@ class Observation:
         raise UnknownElement(f"no element [{number}] in the current list")
 
     def element_list_text(self) -> str:
+        if not self.elements and not self.omitted_count:
+            return NO_ELEMENTS
         lines = []
         for element in self.elements:
             line = f"[{element.number}] {element.description}"
@@ -135,6 +145,10 @@ def describe(facts: ElementFacts) -> str:
 
     if kind in _ACTION_KINDS and facts.text:
         parts.append((f"{kind} ", facts.text))
+        # A real accessible name that says something else is shown too, e.g. which of
+        # many "Edit" links this is. Guessed labels are never added next to visible text.
+        if facts.label_source == "accessible name" and _differs(facts.label, facts.text):
+            parts.append((", named ", facts.label))
     elif facts.label and facts.label_source in _LABEL_WORDING:
         parts.append((f"{kind}, {_LABEL_WORDING[facts.label_source]} ", facts.label))
     else:
@@ -167,6 +181,77 @@ def choose_elements(
     outside = [i for i, f in enumerate(facts) if not f.box.intersects(viewport_width, viewport_height)]
     ordered = visible + outside
     return ordered[:max_elements], max(0, len(ordered) - max_elements)
+
+
+async def observe(page: Page, max_elements: Optional[int] = None) -> Observation:
+    """The page as the model will see it now: screenshot plus numbered element list."""
+    viewport = page.viewport_size
+    if viewport is None:
+        raise RuntimeError("the page has no fixed window size, so boxes could not match the screenshot")
+    width, height = viewport["width"], viewport["height"]
+    limit = settings.discovery_max_elements if max_elements is None else max_elements
+
+    collected = await page.evaluate_handle(_COLLECTOR_SOURCE)
+    try:
+        # Facts come back as plain data; handles are made only for the elements listed.
+        raw_facts = await collected.evaluate("result => result.facts")
+        facts = [_to_facts(raw) for raw in raw_facts]
+        chosen, omitted = choose_elements(facts, width, height, limit)
+        handles = await _handles_for(collected, chosen)
+    finally:
+        await collected.dispose()
+    # Taken straight after the facts, so boxes and pixels describe the same moment.
+    screenshot = await page.screenshot()
+
+    elements = [
+        PageElement(
+            number=number,
+            facts=facts[index],
+            description=describe(facts[index]),
+            in_viewport=facts[index].box.intersects(width, height),
+            handle=handle,
+        )
+        for number, (index, handle) in enumerate(zip(chosen, handles), start=1)
+    ]
+    return Observation(
+        url=page.url,
+        title=await page.title(),
+        screenshot=screenshot,
+        elements=elements,
+        omitted_count=omitted,
+    )
+
+
+def _to_facts(raw: dict) -> ElementFacts:
+    # An unknown key raises TypeError here; a test checks that none are missing either.
+    return ElementFacts(**{**raw, "box": Box(**raw["box"]), "options": tuple(raw["options"])})
+
+
+async def _handles_for(collected: JSHandle, chosen: list[int]) -> list[ElementHandle]:
+    # The page still holds every candidate and hands back only the chosen ones, in list
+    # order, so no handle is ever made for an element that is not listed.
+    picked = await collected.evaluate_handle(
+        "(result, chosen) => chosen.map((index) => result.elements[index])", chosen
+    )
+    try:
+        properties = await picked.get_properties()
+    finally:
+        await picked.dispose()
+    handles = [properties[str(index)].as_element() for index in _element_indexes(properties)]
+    if len(handles) != len(chosen) or any(handle is None for handle in handles):
+        raise RuntimeError(f"expected {len(chosen)} element handles from the page, got {len(handles)}")
+    return handles
+
+
+def _element_indexes(keys: Iterable[str]) -> list[int]:
+    # Array keys arrive as strings, in no promised order. Sorted as text, "10" would
+    # come before "2"; so they are sorted as numbers, and non-numeric keys (such as
+    # "length", if present) are dropped because they are not elements.
+    return sorted(int(key) for key in keys if key.isdigit())
+
+
+def _differs(first: str, second: str) -> bool:
+    return " ".join(first.split()).casefold() != " ".join(second.split()).casefold()
 
 
 def _fit(parts: list[tuple[str, Optional[str]]], limit: int) -> str:
