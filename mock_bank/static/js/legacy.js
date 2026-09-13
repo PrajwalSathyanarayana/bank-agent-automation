@@ -1,7 +1,6 @@
-// CoreBank Teller client script (D026).
+// CoreBank Teller client script.
 // Display-only except confirmPayment(). The session countdown never
-// redirects, so the deterministic session-timeout trigger (D018) is
-// unaffected.
+// redirects, so the deterministic session-timeout trigger is unaffected.
 
 var SESSION_SECONDS = 15 * 60;
 

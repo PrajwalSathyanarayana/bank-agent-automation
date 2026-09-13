@@ -9,7 +9,7 @@ class Env(BaseSettings):
         extra="ignore",
     )
 
-    # Secrets print as **********; read them only via .get_secret_value() where used (D038)
+    # Secrets print as **********; read them only via .get_secret_value() where used
     anthropic_api_key: SecretStr
     anthropic_model: str
     mock_bank_base_url: str = "http://localhost:5000"

@@ -28,7 +28,7 @@ def load_member_data() -> dict:
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = env.mock_bank_secret_key.get_secret_value()
-    # New value every startup; sessions from a previous run are rejected (D028).
+    # New value every startup; sessions from a previous run are rejected.
     app.config["BOOT_ID"] = secrets.token_hex(8)
     app.config["MEMBER_DATA"] = load_member_data()
 
@@ -42,6 +42,6 @@ def create_app() -> Flask:
 if __name__ == "__main__":
     app = create_app()
     # Bind to MOCK_BANK_BASE_URL's host/port so the printed link, the
-    # allowlist's permitted domain (D021), and the config always agree.
+    # allowlist's permitted domain, and the config always agree.
     base = urlparse(env.mock_bank_base_url)
     app.run(host=base.hostname, port=base.port or 5000, debug=True)

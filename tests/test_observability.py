@@ -70,7 +70,7 @@ def test_bank_password_scrubbed_from_free_text(tmp_path, monkeypatch):
     logger = _make_logger(tmp_path, monkeypatch)
     password = env.mock_bank_password.get_secret_value()
     # "detail" isn't a sensitive field name and the password matches no
-    # pattern, so only the exact-value scrub can catch it (D034).
+    # pattern, so only the exact-value scrub can catch it.
     logger._emit("TEST_EVENT", {"detail": f"typing failed near {password} on step 3"})
     raw = logger.log_path.read_text(encoding="utf-8")
     assert password not in raw

@@ -9,7 +9,7 @@ VALID_PASSWORD = "admin123"
 
 
 def has_valid_session() -> bool:
-    """A session counts only if this server run issued it (D028).
+    """A session counts only if this server run issued it.
 
     The cookie is signed with the SECRET_KEY from .env, so it stays
     cryptographically valid across restarts; the boot ID is what ties it
@@ -26,7 +26,7 @@ def inject_session_state():
 def login_required(view_func):
     """Redirects to /session-timeout when no valid session exists.
 
-    Deterministic stand-in for real session expiry (D018): the test
+    Deterministic stand-in for real session expiry: the test
     harness can produce this exact condition on demand by clearing
     cookies, instead of waiting out a real timer.
     """
@@ -67,7 +67,7 @@ def login_submit():
 
 @auth_bp.route("/logout", methods=["GET"])
 def logout():
-    # A plain GET link, as legacy portals did (D027). A modern app would
+    # A plain GET link, as legacy portals did. A modern app would
     # use POST so another site can't silently sign the user out.
     session.clear()
     return redirect(url_for("auth.login", signed_off=1))

@@ -1,6 +1,6 @@
-/* CoreBank Teller - legacy stylesheet (circa-2006 look, D026).
+/* CoreBank Teller - legacy stylesheet (circa-2006 look).
    Styling uses generic class names and element selectors only; no ids
-   or test hooks on interactive elements (D016). */
+   or test hooks on interactive elements. */
 
 body {
   margin: 0;
@@ -151,7 +151,7 @@ input[type=submit]:active, input[type=button]:active, input[type=reset]:active {
 .fineprint { margin-top: 8px; font-size: 10px; color: #666; }
 .actions { margin-top: 8px; }
 
-/* Promotional interstitial (D011) - rendered last in <body>, above all content */
+/* Promotional interstitial - rendered last in <body>, above all content */
 .overlay {
   position: fixed;
   top: 0;

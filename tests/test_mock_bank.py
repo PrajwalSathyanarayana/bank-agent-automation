@@ -136,7 +136,7 @@ def test_billpay_without_member_selected_redirects_to_search(logged_in_client):
     assert resp.headers["Location"] == "/search?need_member=1"
 
 
-# --- D028: explain the bill pay redirect, boot-scoped sessions, breadcrumb link ---
+# --- bill pay redirect notice, boot-scoped sessions, breadcrumb link ---
 
 def test_search_explains_why_when_sent_from_billpay(logged_in_client):
     resp = logged_in_client.get("/search?need_member=1")
@@ -227,7 +227,7 @@ def test_billpay_confirm_without_pending_payment_redirects_to_billpay(logged_in_
     assert resp.headers["Location"] == "/billpay"
 
 
-# --- D027: homepage + sign off ---
+# --- homepage + sign off ---
 
 def test_root_shows_homepage_with_login_button_when_not_logged_in(client):
     resp = client.get("/")

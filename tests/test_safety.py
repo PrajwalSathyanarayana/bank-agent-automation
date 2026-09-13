@@ -193,14 +193,14 @@ def test_redact_text_scrubs_ssn_pattern():
 
 def test_redact_dict_applies_regex_backstop_to_non_sensitive_key():
     # "notes" is not in SENSITIVE_KEYS, but the value itself leaks an
-    # email — the regex backstop should still catch it (D023's hybrid).
+    # email — the regex backstop should still catch it.
     data = {"notes": "please follow up with jane.doe@example.com"}
     result = redact_dict(data)
     assert REDACTED in result["notes"]
     assert "jane.doe@example.com" not in result["notes"]
 
 
-# --- exact-value scrub of known secrets (D034, D037) ---
+# --- exact-value scrub of known secrets ---
 
 def test_scrub_replaces_secret_inside_a_sentence():
     result = scrub_known_values("typing failed near s3cret-VALUE on step 3", ["s3cret-VALUE"])

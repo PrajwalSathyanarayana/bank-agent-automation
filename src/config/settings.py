@@ -9,11 +9,11 @@ class Settings(BaseModel):
     evidence_dir: Path = Path(env.evidence_dir).resolve()
 
     # System-level execution timeouts (not per-step)
-    # Steps catch fast loops, wall-clock catches slow hangs (D033)
+    # Steps catch fast loops, wall-clock catches slow hangs
     discovery_max_steps: int = 40
     discovery_timeout_ms: int = 900_000        # 15 minutes total
 
-    # Each call gets min(cap, time left); SDK auto-retry is off in discovery (D033)
+    # Each call gets min(cap, time left); SDK auto-retry is off in discovery
     discovery_llm_call_timeout_ms: int = 90_000
     discovery_page_action_timeout_ms: int = 30_000
     discovery_llm_retries: int = 1

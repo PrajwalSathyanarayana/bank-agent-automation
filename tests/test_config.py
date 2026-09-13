@@ -41,8 +41,8 @@ def test_settings_computed_urls_match_base_url():
     assert settings.mock_bank_search_url == f"{env.mock_bank_base_url}/search"
 
 
-def test_settings_operator_timeout_matches_architecture_spec():
-    # ARCHITECTURE.md Module 2: operator timeout is 10 minutes.
+def test_settings_operator_timeout_is_ten_minutes():
+    # An operator gets 10 minutes to act on a handoff before it times out.
     assert settings.operator_timeout_ms == 600_000
 
 
@@ -52,7 +52,7 @@ def test_settings_is_pydantic_model():
     assert "artifact_storage_dir" in dumped
 
 
-def test_settings_discovery_limits_match_d033():
+def test_settings_discovery_limits():
     assert settings.discovery_max_steps == 40
     assert settings.discovery_timeout_ms == 900_000
     assert settings.discovery_llm_call_timeout_ms == 90_000
@@ -60,7 +60,7 @@ def test_settings_discovery_limits_match_d033():
     assert settings.discovery_llm_retries == 1
 
 
-# --- D038: secrets held as SecretStr ---
+# --- secrets held as SecretStr ---
 
 def test_secrets_are_masked_when_printed():
     for secret in (

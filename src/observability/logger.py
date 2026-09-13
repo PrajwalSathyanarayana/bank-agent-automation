@@ -14,7 +14,7 @@ class RunLogger:
     """Structured JSON evidence logger, one instance per discovery or
     replay run. Writes newline-delimited JSON to evidence/{mode}/run_log.json,
     appending as each event happens (crash-resilient — evidence survives
-    up to the point of a hard failure, per D024).
+    up to the point of a hard failure).
     """
 
     def __init__(self, mode: str, capability: Optional[str] = None):
@@ -42,8 +42,7 @@ class RunLogger:
 
     def _emit(self, event_type: str, fields: dict) -> None:
         """Single chokepoint every tap point funnels through — redaction
-        happens here so it cannot be forgotten at a call site (D024,
-        same defense-in-depth principle as D022's verify_tier).
+        happens here so it cannot be forgotten at a call site.
         """
         safe_fields = scrub_known_values(
             redact_dict(fields),

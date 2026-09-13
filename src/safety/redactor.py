@@ -7,7 +7,7 @@ SENSITIVE_KEYS = {
     # credentials / secrets
     "password", "api_key", "anthropic_api_key", "secret_key",
     "mock_bank_secret_key", "session_token", "token", "auth_token",
-    # member PII (D023 — "regulated financial data")
+    # member PII (regulated financial data)
     "email", "phone", "address", "street", "city", "state", "zip",
     "first_name", "last_name",
 }
@@ -16,7 +16,7 @@ SENSITIVE_KEYS = {
 # (e.g. ErrorDetail.message, RecoveryAttemptLog.details) rather than
 # sitting in a clearly-named field. Known limitation: the card-number
 # pattern is a rough 13-16-digit heuristic and could false-positive on
-# an unrelated long digit run — accepted per D023 rather than
+# an unrelated long digit run — accepted rather than
 # over-engineering PII detection for this scope.
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 _PHONE_RE = re.compile(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
@@ -50,7 +50,7 @@ def redact_value(key: str, value: Any) -> Any:
 
 
 def scrub_known_values(value: Any, secrets: list[str]) -> Any:
-    """Replaces exact known secret values anywhere, including inside free text (D034)."""
+    """Replaces exact known secret values anywhere, including inside free text."""
     ordered = sorted((s for s in secrets if s), key=len, reverse=True)
     return _scrub(value, ordered)
 
