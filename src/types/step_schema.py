@@ -43,6 +43,9 @@ class CheckpointType(str, Enum):
     ELEMENT_VISIBLE = "element_visible"
     TEXT_MATCH = "text_match"
     URL_CONTAINS = "url_contains"
+    # The page's path equals this one: no host (each bank has its own), no query or
+    # fragment (legacy apps keep session tokens there). Tells /billpay from /billpay/confirm.
+    PAGE_PATH = "page_path"
     VALUE_EQUALS = "value_equals"
     PAGE_TITLE = "page_title"
     # Answered at replay with the next step's own locators, so none are stored here.
@@ -58,6 +61,7 @@ _NEEDS_EXPECTED_VALUE = {
     CheckpointType.TEXT_MATCH,
     CheckpointType.VALUE_EQUALS,
     CheckpointType.URL_CONTAINS,
+    CheckpointType.PAGE_PATH,
     CheckpointType.PAGE_TITLE,
 }
 
@@ -87,6 +91,11 @@ class StepCheckpoint(BaseModel):
             raise ValueError(f"{self.type.value} checkpoint requires expected_value")
         if not needs_value and self.expected_value is not None:
             raise ValueError(f"{self.type.value} checkpoint must not have expected_value")
+
+        if self.type == CheckpointType.PAGE_PATH:
+            path = self.expected_value
+            if not path.startswith("/") or "?" in path or "#" in path:
+                raise ValueError("page_path checkpoint holds a path only: it starts with '/' and has no query or fragment")
         return self
 
 

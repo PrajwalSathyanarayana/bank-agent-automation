@@ -10,6 +10,8 @@ from .step_schema import ActionType, CheckpointType, Step
 _SIMPLE_NAME = r"^[a-z][a-z0-9_]*$"
 _CREDENTIAL_PREFIX = "credential"
 _ADDRESS_SEGMENT_END = set("/\"'?#&")
+# Checkpoints whose expected value is an address, so placeholders there must be whole segments.
+_ADDRESS_CHECKS = {CheckpointType.URL_CONTAINS, CheckpointType.PAGE_PATH}
 
 
 class ParamType(str, Enum):
@@ -213,7 +215,7 @@ class Artifact(BaseModel):
                 check(
                     checkpoint.expected_value,
                     f"{where} checkpoint",
-                    address=checkpoint.type == CheckpointType.URL_CONTAINS,
+                    address=checkpoint.type in _ADDRESS_CHECKS,
                 )
         for assertion in self.global_assertions:
             check(

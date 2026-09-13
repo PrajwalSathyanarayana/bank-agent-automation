@@ -156,6 +156,7 @@ def test_element_checkpoint_without_locator_rejected(checkpoint_type, expected_v
     "checkpoint_type, expected_value",
     [
         (CheckpointType.URL_CONTAINS, "/billpay"),
+        (CheckpointType.PAGE_PATH, "/billpay"),
         (CheckpointType.PAGE_TITLE, "Bill Payment"),
         (CheckpointType.NEXT_STEP_TARGET, None),
     ],
@@ -171,6 +172,7 @@ def test_address_title_or_next_step_checkpoint_with_locator_rejected(checkpoint_
         (CheckpointType.TEXT_MATCH, _valid_locator()),
         (CheckpointType.VALUE_EQUALS, _valid_locator()),
         (CheckpointType.URL_CONTAINS, None),
+        (CheckpointType.PAGE_PATH, None),
         (CheckpointType.PAGE_TITLE, None),
     ],
 )
@@ -194,6 +196,25 @@ def test_presence_checkpoint_with_expected_value_rejected(checkpoint_type, targe
 def test_checkpoint_rejects_empty_expected_value():
     with pytest.raises(ValidationError):
         _checkpoint(CheckpointType.URL_CONTAINS, expected_value="")
+
+
+def test_page_path_checkpoint_constructs():
+    checkpoint = _checkpoint(CheckpointType.PAGE_PATH, expected_value="/billpay/confirm")
+    assert checkpoint.expected_value == "/billpay/confirm"
+
+
+@pytest.mark.parametrize(
+    "expected_value",
+    [
+        pytest.param("http://localhost:5000/billpay", id="with a host"),
+        pytest.param("billpay", id="not starting with a slash"),
+        pytest.param("/search?need_member=1", id="with a query"),
+        pytest.param("/billpay#form", id="with a fragment"),
+    ],
+)
+def test_page_path_checkpoint_holds_a_path_only(expected_value):
+    with pytest.raises(ValidationError, match="path only"):
+        _checkpoint(CheckpointType.PAGE_PATH, expected_value=expected_value)
 
 
 def _step_checking_next_target(sequence_index: int) -> Step:
@@ -661,9 +682,10 @@ def test_placeholder_inside_a_segment_or_text_locator_rejected(locator_value):
         _artifact_with(_step_with(action=ActionType.CLICK, locator_value=locator_value))
 
 
-def test_url_check_placeholder_must_be_a_whole_segment():
-    whole = _checkpoint(CheckpointType.URL_CONTAINS, expected_value="/member/{member_id}/accounts")
-    partial = _checkpoint(CheckpointType.URL_CONTAINS, expected_value="/member-{member_id}")
+@pytest.mark.parametrize("checkpoint_type", [CheckpointType.URL_CONTAINS, CheckpointType.PAGE_PATH])
+def test_url_check_placeholder_must_be_a_whole_segment(checkpoint_type):
+    whole = _checkpoint(checkpoint_type, expected_value="/member/{member_id}/accounts")
+    partial = _checkpoint(checkpoint_type, expected_value="/member-{member_id}")
     _artifact_with(_step_with(checkpoints=[whole]))
     with pytest.raises(ValidationError, match="whole address segment"):
         _artifact_with(_step_with(checkpoints=[partial]))
