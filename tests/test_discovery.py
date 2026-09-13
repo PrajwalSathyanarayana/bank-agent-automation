@@ -1,27 +1,37 @@
 import dataclasses
 import json
+import math
 import struct
+from io import BytesIO
 
 import pytest
+from PIL import Image, ImageFont
 from playwright.async_api import expect
 
 from src.config.env import env
 from src.config.settings import settings
 from src.discovery.perception import (
     _COLLECTOR_SOURCE,
+    _TAG_FONT,
     DESCRIPTION_MAX,
+    MARK_COLOURS,
     NO_ELEMENTS,
     OUTSIDE_MARKER,
+    TAG_FONT_SIZE,
+    TAG_TEXT_COLOUR,
     Box,
     ElementFacts,
     Observation,
     PageElement,
     UnknownElement,
     _element_indexes,
+    _place_tag,
     choose_elements,
     describe,
     describe_options,
     element_kind,
+    mark,
+    mark_colour,
     observe,
 )
 from src.safety.allowlist import check_domain
@@ -697,3 +707,153 @@ async def test_observation_records_the_address_and_title(page):
     observation = await observe(page)
     assert observation.url == page.url and observation.url.endswith("/login")
     assert observation.title == "Sign On - Sunbelt Credit Union"
+
+
+# --- perception: the marked screenshot ---
+
+WHITE = (255, 255, 255)
+IMAGE_WIDTH, IMAGE_HEIGHT = 1280, 800
+WIDE_BOX = Box(100, 100, 200, 40)  # drawn at pixels (100, 100) to (299, 139)
+
+
+def _blank_png() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (IMAGE_WIDTH, IMAGE_HEIGHT), WHITE).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _image(png: bytes) -> Image.Image:
+    return Image.open(BytesIO(png)).convert("RGB")
+
+
+def _marked(number, box, in_viewport=True) -> PageElement:
+    return _element(number, _facts("a", box=box, text="x"), in_viewport=in_viewport)
+
+
+def _contrast(first, second) -> float:
+    # The accessibility standard's contrast ratio between two colours.
+    def luminance(rgb):
+        def channel(value):
+            value /= 255
+            return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+        red, green, blue = (channel(value) for value in rgb)
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_marked_copy_is_a_new_png_of_the_same_size():
+    clean = _blank_png()
+    marked = mark(clean, [_marked(1, WIDE_BOX)])
+    assert marked != clean
+    with Image.open(BytesIO(marked)) as image:
+        assert image.format == "PNG"
+        assert image.size == (IMAGE_WIDTH, IMAGE_HEIGHT)
+
+
+def test_marking_the_same_input_twice_gives_the_same_image():
+    elements = [_marked(1, WIDE_BOX), _marked(2, Box(400, 100, 80, 20))]
+    assert mark(_blank_png(), elements) == mark(_blank_png(), elements)
+
+
+def test_outline_frames_the_element_without_filling_it():
+    image = _image(mark(_blank_png(), [_marked(1, WIDE_BOX)]))
+    assert image.getpixel((100, 130)) == mark_colour(1)  # left edge, below the tag
+    assert image.getpixel((200, 139)) == mark_colour(1)  # bottom edge
+    assert image.getpixel((200, 120)) == WHITE  # centre
+
+
+def _tag_pixels(image, label, area) -> list:
+    left, top, right, bottom = _place_tag(label, area, [], IMAGE_WIDTH, IMAGE_HEIGHT)
+    return list(image.crop((left, top, right + 1, bottom + 1)).get_flattened_data())
+
+
+def test_tag_holds_the_element_colour_and_white_digits():
+    image = _image(mark(_blank_png(), [_marked(1, WIDE_BOX)]))
+    pixels = _tag_pixels(image, "1", (100, 100, 299, 139))
+    assert mark_colour(1) in pixels
+    # Digits are anti-aliased, so look for pixels that are nearly white.
+    assert max(min(pixel) for pixel in pixels) >= 230
+
+
+def test_element_outside_the_visible_area_leaves_the_image_unchanged():
+    image = _image(mark(_blank_png(), [_marked(1, BELOW, in_viewport=False)]))
+    assert image.getcolors() == [(IMAGE_WIDTH * IMAGE_HEIGHT, WHITE)]
+
+
+def test_outlines_never_cross_a_number():
+    # Element 2's left edge (x = 105) runs straight through element 1's tag.
+    elements = [_marked(1, WIDE_BOX), _marked(2, Box(105, 50, 100, 100))]
+    image = _image(mark(_blank_png(), elements))
+    assert mark_colour(2) not in _tag_pixels(image, "1", (100, 100, 299, 139))
+    assert image.getpixel((105, 130)) == mark_colour(2)  # the outline is there outside the tag
+
+
+def test_mark_colours_cycle_and_neighbours_differ():
+    assert mark_colour(len(MARK_COLOURS) + 1) == mark_colour(1)
+    assert all(mark_colour(n) != mark_colour(n + 1) for n in range(1, 30))
+
+
+@pytest.mark.parametrize("colour", MARK_COLOURS)
+def test_white_digits_are_readable_on_every_mark_colour(colour):
+    assert _contrast(colour, TAG_TEXT_COLOUR) >= 4.5
+
+
+def test_tag_moves_right_past_a_tag_in_the_way():
+    first = _place_tag("1", (100, 100, 299, 139), [], IMAGE_WIDTH, IMAGE_HEIGHT)
+    second = _place_tag("2", (100, 100, 299, 139), [first], IMAGE_WIDTH, IMAGE_HEIGHT)
+    assert second[0] == first[2] + 1
+    assert second[1] == first[1]
+
+
+def test_tag_with_no_room_to_move_right_stays_at_its_corner():
+    in_the_way = (1250, 100, 1279, 112)
+    tag = _place_tag("1", (1270, 100, 1279, 139), [in_the_way], IMAGE_WIDTH, IMAGE_HEIGHT)
+    assert tag[2] == IMAGE_WIDTH - 1  # as far right as the image allows, not beyond it
+    assert tag[1] == 100
+
+
+def test_element_cut_off_at_the_top_gets_its_tag_on_the_visible_part():
+    image = _image(mark(_blank_png(), [_marked(1, Box(100, -10, 200, 40))]))
+    assert image.getpixel((100, 0)) == mark_colour(1)
+
+
+def test_tag_of_an_element_cut_off_at_the_bottom_stays_inside_the_image():
+    tag = _place_tag("1", (100, 795, 299, IMAGE_HEIGHT - 1), [], IMAGE_WIDTH, IMAGE_HEIGHT)
+    assert tag[3] == IMAGE_HEIGHT - 1
+    assert tag[1] < 795
+
+
+def test_tag_font_is_pillows_scalable_font():
+    assert isinstance(_TAG_FONT, ImageFont.FreeTypeFont)
+    assert _TAG_FONT.size == TAG_FONT_SIZE
+
+
+def _bottom_edge_pixel(image, box):
+    # The middle of the element's bottom edge, which the outline always covers.
+    return image.getpixel((int(box.x + box.width / 2), math.ceil(box.y + box.height) - 1))
+
+
+@pytest.mark.anyio
+async def test_marked_copy_outlines_the_password_box_and_the_clean_copy_does_not(page):
+    await page.goto("/login")
+    observation = await observe(page)
+    password_box = next(element for element in observation.elements if element.facts.input_type == "password")
+    colour = mark_colour(password_box.number)
+    assert _bottom_edge_pixel(_image(observation.marked_screenshot), password_box.facts.box) == colour
+    assert _bottom_edge_pixel(_image(observation.screenshot), password_box.facts.box) != colour
+
+
+@pytest.mark.anyio
+async def test_both_bill_pay_links_are_outlined_in_their_own_colours(page, dashboard_popup):
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/10234")
+    observation = await observe(page)
+    image = _image(observation.marked_screenshot)
+    bill_pay = [element for element in observation.elements if element.facts.text == "Bill Pay"]
+    assert len(bill_pay) == 2
+    for element in bill_pay:
+        assert _bottom_edge_pixel(image, element.facts.box) == mark_colour(element.number)
+    assert mark_colour(bill_pay[0].number) != mark_colour(bill_pay[1].number)

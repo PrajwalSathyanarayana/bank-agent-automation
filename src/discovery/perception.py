@@ -1,15 +1,47 @@
 """What the discovery model sees each step: a screenshot plus a numbered list of elements."""
 import json
+import math
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
+from PIL import Image, ImageDraw, ImageFont
 from playwright.async_api import ElementHandle, JSHandle, Page
 
 from src.config.settings import settings
 
 # The in-page fact collector, read once at import so a missing file fails at start-up.
 _COLLECTOR_SOURCE = Path(__file__).with_name("collect_elements.js").read_text(encoding="utf-8")
+
+# Marks drawn on the model's copy of the screenshot. Colours cycle by element number so
+# neighbours differ; each is dark enough for white digits and clear of the bank's blues
+# and greys.
+MARK_COLOURS = (
+    (194, 24, 91),   # magenta
+    (46, 125, 50),   # green
+    (106, 27, 154),  # purple
+    (191, 54, 12),   # orange
+    (0, 121, 107),   # teal
+    (121, 85, 72),   # brown
+)
+TAG_TEXT_COLOUR = (255, 255, 255)
+OUTLINE_WIDTH = 2
+TAG_FONT_SIZE = 12
+_TAG_PAD_X = 3
+_TAG_PAD_Y = 2
+
+# Pillow's bundled scalable font: the same glyphs on every machine for the pinned Pillow
+# version. Without FreeType, Pillow silently substitutes a tiny bitmap font and ignores
+# the size, so that case fails loudly here instead.
+_TAG_FONT = ImageFont.load_default(size=TAG_FONT_SIZE)
+if not isinstance(_TAG_FONT, ImageFont.FreeTypeFont):
+    raise RuntimeError("Pillow was built without FreeType; the numbered marks need its scalable font")
+# Every tag is as tall as the digits, whichever digits it holds.
+_, _DIGITS_TOP, _, _DIGITS_BOTTOM = _TAG_FONT.getbbox("0123456789")
+
+# (left, top, right, bottom) in screenshot pixels, both ends included, as Pillow draws them.
+_Rect = tuple[int, int, int, int]
 
 DESCRIPTION_MAX = 80
 OPTIONS_MAX = 10
@@ -183,6 +215,83 @@ def choose_elements(
     return ordered[:max_elements], max(0, len(ordered) - max_elements)
 
 
+def mark_colour(number: int) -> tuple[int, int, int]:
+    return MARK_COLOURS[(number - 1) % len(MARK_COLOURS)]
+
+
+def mark(screenshot: bytes, elements: Sequence[PageElement]) -> bytes:
+    """A copy of the screenshot with each visible element's outline and number drawn on it.
+
+    The screenshot passed in is left as it is: it is the clean evidence copy.
+    """
+    with Image.open(BytesIO(screenshot)) as original:
+        image = original.convert("RGB")
+    draw = ImageDraw.Draw(image)
+    # Elements outside the visible area stay in the list but get no mark.
+    shown = []
+    for element in elements:
+        area = _visible_part(element.facts.box, image.width, image.height) if element.in_viewport else None
+        if area is not None:
+            shown.append((element, area))
+
+    # Outlines first, then tags, so no outline is ever drawn across a number.
+    for element, area in shown:
+        draw.rectangle(area, outline=mark_colour(element.number), width=OUTLINE_WIDTH)
+    placed: list[_Rect] = []
+    for element, area in shown:
+        label = str(element.number)
+        tag = _place_tag(label, area, placed, image.width, image.height)
+        placed.append(tag)
+        draw.rectangle(tag, fill=mark_colour(element.number))
+        text_left = _TAG_FONT.getbbox(label)[0]
+        draw.text(
+            (tag[0] + _TAG_PAD_X - text_left, tag[1] + _TAG_PAD_Y - _DIGITS_TOP),
+            label,
+            fill=TAG_TEXT_COLOUR,
+            font=_TAG_FONT,
+        )
+
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _visible_part(box: Box, width: int, height: int) -> Optional[_Rect]:
+    # Box coordinates are CSS pixels, equal to screenshot pixels at scale factor 1.
+    left = max(0, math.floor(box.x))
+    top = max(0, math.floor(box.y))
+    right = min(width, math.ceil(box.x + box.width)) - 1
+    bottom = min(height, math.ceil(box.y + box.height)) - 1
+    if right < left or bottom < top:
+        return None
+    return (left, top, right, bottom)
+
+
+def _place_tag(label: str, area: _Rect, placed: list[_Rect], width: int, height: int) -> _Rect:
+    text_left, _, text_right, _ = _TAG_FONT.getbbox(label)
+    tag_width = text_right - text_left + 2 * _TAG_PAD_X
+    tag_height = _DIGITS_BOTTOM - _DIGITS_TOP + 2 * _TAG_PAD_Y
+    # Inside the element, at the top-left of its visible part, kept inside the image.
+    top = max(0, min(area[1], height - tag_height))
+    corner = max(0, min(area[0], width - tag_width))
+    left = corner
+    while True:
+        tag = (left, top, left + tag_width - 1, top + tag_height - 1)
+        in_the_way = [other for other in placed if _overlaps(tag, other)]
+        if not in_the_way:
+            return tag
+        # Move right along the box's top edge, past the tags in the way.
+        left = max(other[2] for other in in_the_way) + 1
+        if left + tag_width > width:
+            # No room left in the image: stay at the corner. Drawn after the tag it
+            # overlaps, this number stays readable.
+            return (corner, top, corner + tag_width - 1, top + tag_height - 1)
+
+
+def _overlaps(first: _Rect, second: _Rect) -> bool:
+    return first[0] <= second[2] and second[0] <= first[2] and first[1] <= second[3] and second[1] <= first[3]
+
+
 async def observe(page: Page, max_elements: Optional[int] = None) -> Observation:
     """The page as the model will see it now: screenshot plus numbered element list."""
     viewport = page.viewport_size
@@ -219,6 +328,7 @@ async def observe(page: Page, max_elements: Optional[int] = None) -> Observation
         screenshot=screenshot,
         elements=elements,
         omitted_count=omitted,
+        marked_screenshot=mark(screenshot, elements),
     )
 
 
