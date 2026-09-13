@@ -28,6 +28,18 @@ class OutputParamDefinition(BaseModel):
     description: str = Field(min_length=1)
 
 
+class CredentialKind(str, Enum):
+    CONFIG = "config"
+    SECRET = "secret"
+
+
+# Supplied by our system from configuration, never by the caller; stored by name only.
+class CredentialDefinition(BaseModel):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    kind: CredentialKind
+    description: str = Field(min_length=1)
+
+
 class GlobalAssertionType(str, Enum):
     FINAL_URL_MATCH = "final_url_match"
     SUCCESS_BANNER_TEXT = "success_banner_text"
@@ -47,6 +59,11 @@ class ArtifactMetadata(BaseModel):
         default_factory=lambda: str(uuid.uuid4())
     )
     capability: str = Field(min_length=1)
+    description: str = Field(
+        min_length=1,
+        description="What the capability does, written as a goal template, "
+        "e.g. 'For member {member_id}, pay {amount} to {payee_name}.'"
+    )
     version: str = Field(
         description="SemVer format e.g. 1.0.0"
     )
@@ -91,6 +108,11 @@ class Artifact(BaseModel):
     input_parameters: list[InputParamDefinition] = Field(
         default_factory=list
     )
+    credentials: list[CredentialDefinition] = Field(
+        default_factory=list,
+        description="Values our system supplies from configuration (names only), "
+        "never passed by the caller"
+    )
     output_definitions: list[OutputParamDefinition] = Field(
         default_factory=list,
         description="Typed outputs this capability returns to the calling agent"
@@ -131,4 +153,11 @@ class Artifact(BaseModel):
                 f"EXTRACT_TEXT step(s) reference undeclared output_key: {orphan_extractions}"
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_credential_keys_unique(self) -> "Artifact":
+        keys = [c.key for c in self.credentials]
+        if len(keys) != len(set(keys)):
+            raise ValueError("credentials keys must be unique")
         return self

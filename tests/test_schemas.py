@@ -15,6 +15,8 @@ from src.types.step_schema import (
 from src.types.artifact_schema import (
     Artifact,
     ArtifactMetadata,
+    CredentialDefinition,
+    CredentialKind,
     GlobalAssertion,
     GlobalAssertionType,
     InputParamDefinition,
@@ -48,6 +50,7 @@ def _valid_metadata() -> ArtifactMetadata:
     now = datetime.now(timezone.utc)
     return ArtifactMetadata(
         capability="member-lookup",
+        description="For member {member_id}, read the savings balance.",
         version="1.0.0",
         integrity_hash="a" * 64,
         target_url="http://localhost:5000/search",
@@ -109,28 +112,32 @@ def test_artifact_requires_at_least_one_step():
 
 def test_artifact_metadata_rejects_bad_semver():
     now = datetime.now(timezone.utc)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc_info:
         ArtifactMetadata(
             capability="member-lookup",
+            description="For member {member_id}, read the savings balance.",
             version="v1",
             integrity_hash="a" * 64,
             target_url="http://localhost:5000/search",
             created_timestamp=now,
             last_updated_timestamp=now,
         )
+    assert [e["loc"] for e in exc_info.value.errors()] == [("version",)]
 
 
 def test_artifact_metadata_rejects_bad_integrity_hash():
     now = datetime.now(timezone.utc)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc_info:
         ArtifactMetadata(
             capability="member-lookup",
+            description="For member {member_id}, read the savings balance.",
             version="1.0.0",
             integrity_hash="not-a-hash",
             target_url="http://localhost:5000/search",
             created_timestamp=now,
             last_updated_timestamp=now,
         )
+    assert [e["loc"] for e in exc_info.value.errors()] == [("integrity_hash",)]
 
 
 def test_artifact_with_input_params_and_global_assertions():
@@ -333,3 +340,76 @@ def test_find_placeholders():
     assert find_placeholders("{credential:bank_password}") == ["credential:bank_password"]
     assert find_placeholders("Plan {{A}}") == []
     assert find_placeholders("no placeholders here") == []
+
+
+# --- credentials list and description ---
+
+def _credential(key: str, kind: CredentialKind = CredentialKind.SECRET) -> CredentialDefinition:
+    return CredentialDefinition(key=key, kind=kind, description="Supplied by our system")
+
+
+def test_artifact_with_credentials_constructs():
+    artifact = Artifact(
+        metadata=_valid_metadata(),
+        credentials=[
+            _credential("bank_username", CredentialKind.CONFIG),
+            _credential("bank_password", CredentialKind.SECRET),
+        ],
+        steps=[_valid_step()],
+    )
+    assert [c.kind for c in artifact.credentials] == [CredentialKind.CONFIG, CredentialKind.SECRET]
+
+
+def test_duplicate_credential_keys_rejected():
+    with pytest.raises(ValidationError):
+        Artifact(
+            metadata=_valid_metadata(),
+            credentials=[_credential("bank_password"), _credential("bank_password")],
+            steps=[_valid_step()],
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_key", ["bank password", "bank:password", "BankPassword", "1password", ""]
+)
+def test_credential_key_must_be_a_simple_name(bad_key):
+    with pytest.raises(ValidationError):
+        _credential(bad_key)
+
+
+def test_credential_kind_must_be_config_or_secret():
+    with pytest.raises(ValidationError):
+        CredentialDefinition(key="bank_password", kind="token", description="Password")
+
+
+def test_credential_stores_no_value_field():
+    # Names only: the real value must never have a place to live in an artifact.
+    assert set(CredentialDefinition.model_fields) == {"key", "kind", "description"}
+
+
+def test_metadata_requires_a_description():
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValidationError) as exc_info:
+        ArtifactMetadata(
+            capability="member-lookup",
+            version="1.0.0",
+            integrity_hash="a" * 64,
+            target_url="http://localhost:5000/login",
+            created_timestamp=now,
+            last_updated_timestamp=now,
+        )
+    assert [e["loc"] for e in exc_info.value.errors()] == [("description",)]
+
+
+def test_metadata_rejects_an_empty_description():
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValidationError):
+        ArtifactMetadata(
+            capability="member-lookup",
+            description="",
+            version="1.0.0",
+            integrity_hash="a" * 64,
+            target_url="http://localhost:5000/login",
+            created_timestamp=now,
+            last_updated_timestamp=now,
+        )
