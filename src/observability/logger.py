@@ -5,8 +5,9 @@ from uuid import uuid4
 
 from pythonjsonlogger import json as jsonlogger
 
+from src.config.env import env
 from src.config.settings import settings
-from src.safety.redactor import redact_dict
+from src.safety.redactor import redact_dict, scrub_known_values
 
 
 class RunLogger:
@@ -20,6 +21,12 @@ class RunLogger:
         self.mode = mode
         self.trace_id = str(uuid4())
         self.capability = capability
+        self._secrets = (
+            env.anthropic_api_key,
+            env.mock_bank_secret_key,
+            env.mock_bank_password,
+            env.artifact_signing_key,
+        )
 
         log_dir = settings.evidence_dir / mode.lower()
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -38,7 +45,10 @@ class RunLogger:
         happens here so it cannot be forgotten at a call site (D024,
         same defense-in-depth principle as D022's verify_tier).
         """
-        safe_fields = redact_dict(fields)
+        safe_fields = scrub_known_values(
+            redact_dict(fields),
+            [secret.get_secret_value() for secret in self._secrets],
+        )
         self._logger.info(
             event_type,
             extra={

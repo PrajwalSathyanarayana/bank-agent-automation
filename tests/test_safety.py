@@ -12,7 +12,7 @@ from src.safety.allowlist import (
     enforce_safety,
 )
 from src.safety.classifier import SafetyEscalation, classify, verify_tier
-from src.safety.redactor import REDACTED, redact_dict, redact_text
+from src.safety.redactor import REDACTED, redact_dict, redact_text, scrub_known_values
 from src.types.step_schema import ActionType, Locator, LocatorType, SafetyTier, Step
 
 MOCK_BANK_HOSTNAME = urlparse(env.mock_bank_base_url).hostname
@@ -198,3 +198,32 @@ def test_redact_dict_applies_regex_backstop_to_non_sensitive_key():
     result = redact_dict(data)
     assert REDACTED in result["notes"]
     assert "jane.doe@example.com" not in result["notes"]
+
+
+# --- exact-value scrub of known secrets (D034, D037) ---
+
+def test_scrub_replaces_secret_inside_a_sentence():
+    result = scrub_known_values("typing failed near s3cret-VALUE on step 3", ["s3cret-VALUE"])
+    assert result == f"typing failed near {REDACTED} on step 3"
+
+
+def test_scrub_reaches_nested_dicts_and_lists():
+    data = {"error": {"lines": ["ok", "token s3cret-VALUE leaked"]}}
+    result = scrub_known_values(data, ["s3cret-VALUE"])
+    assert result == {"error": {"lines": ["ok", f"token {REDACTED} leaked"]}}
+
+
+def test_scrub_leaves_other_text_untouched():
+    data = {"step_id": "s1", "status": "PASSED", "count": 3}
+    assert scrub_known_values(data, ["s3cret-VALUE"]) == data
+
+
+def test_scrub_ignores_an_empty_secret():
+    assert scrub_known_values("nothing to hide", [""]) == "nothing to hide"
+
+
+def test_scrub_replaces_longer_secret_first():
+    # If "abc" were replaced first, "abcdef" would leave "def" behind.
+    result = scrub_known_values("value=abcdef", ["abc", "abcdef"])
+    assert result == f"value={REDACTED}"
+    assert "def" not in result

@@ -1,6 +1,7 @@
 import json
 
 from src.config import settings as settings_module
+from src.config.env import env
 from src.observability.logger import RunLogger
 
 
@@ -63,6 +64,26 @@ def test_redaction_is_applied_at_the_emit_chokepoint(tmp_path, monkeypatch):
     lines = _read_lines(logger.log_path)
     assert lines[0]["password"] == "[REDACTED]"
     assert lines[0]["step_id"] == "s1"
+
+
+def test_bank_password_scrubbed_from_free_text(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    password = env.mock_bank_password.get_secret_value()
+    # "detail" isn't a sensitive field name and the password matches no
+    # pattern, so only the exact-value scrub can catch it (D034).
+    logger._emit("TEST_EVENT", {"detail": f"typing failed near {password} on step 3"})
+    raw = logger.log_path.read_text(encoding="utf-8")
+    assert password not in raw
+    assert "[REDACTED]" in raw
+
+
+def test_signing_key_scrubbed_from_free_text(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    key = env.artifact_signing_key.get_secret_value()
+    logger._emit("TEST_EVENT", {"detail": f"signature check used {key}"})
+    raw = logger.log_path.read_text(encoding="utf-8")
+    assert key not in raw
+    assert "[REDACTED]" in raw
 
 
 def test_recovery_event_handles_optional_fields(tmp_path, monkeypatch):

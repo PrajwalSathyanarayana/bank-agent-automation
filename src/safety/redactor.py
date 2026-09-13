@@ -49,6 +49,24 @@ def redact_value(key: str, value: Any) -> Any:
     return value
 
 
+def scrub_known_values(value: Any, secrets: list[str]) -> Any:
+    """Replaces exact known secret values anywhere, including inside free text (D034)."""
+    ordered = sorted((s for s in secrets if s), key=len, reverse=True)
+    return _scrub(value, ordered)
+
+
+def _scrub(value: Any, ordered: list[str]) -> Any:
+    if isinstance(value, str):
+        for secret in ordered:
+            value = value.replace(secret, REDACTED)
+        return value
+    if isinstance(value, dict):
+        return {key: _scrub(item, ordered) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub(item, ordered) for item in value]
+    return value
+
+
 def redact_dict(data: dict) -> dict:
     """Returns a new dict with sensitive fields redacted. Never mutates
     the input. Recurses into nested dicts/lists so a redacted parent
