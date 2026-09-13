@@ -276,13 +276,16 @@ async def _landing_checks(page: Page, run: RunValues) -> tuple[list[StepCheckpoi
     checkpoints: list[StepCheckpoint] = []
     secrets_found: list[str] = []
 
-    path = urlsplit(page.url).path or "/"
-    outcome = scan(Candidate("address", LocatorType.CSS, "", address=path), run)
-    stored_path = parameterize_address(path, run.text_inputs) if outcome.stored_value is not None else None
-    if stored_path is not None:
-        checkpoints.append(_checkpoint(CheckpointType.PAGE_PATH, stored_path))
-    elif outcome.secret:
-        secrets_found.append(outcome.secret)
+    address = urlsplit(page.url)
+    # Only web pages have a path to check; a blank or data page (tests) has none.
+    if address.scheme in ("http", "https"):
+        path = address.path or "/"
+        outcome = scan(Candidate("address", LocatorType.CSS, "", address=path), run)
+        stored_path = parameterize_address(path, run.text_inputs) if outcome.stored_value is not None else None
+        if stored_path is not None:
+            checkpoints.append(_checkpoint(CheckpointType.PAGE_PATH, stored_path))
+        elif outcome.secret:
+            secrets_found.append(outcome.secret)
 
     title = (await page.title()).strip()
     if title:

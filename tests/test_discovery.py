@@ -2,6 +2,7 @@ import dataclasses
 import json
 import math
 import struct
+from datetime import datetime, timezone
 from io import BytesIO
 
 import pytest
@@ -25,10 +26,20 @@ from src.discovery.locators import (
     prove,
     scan,
 )
-from src.locating.checks import element_wording
+from src.discovery.recorder import Action, AssertionRefused, Recorder, RecordingError
+from src.locating.checks import element_wording, shows_phrase
 from src.locating.resolver import resolve
+from src.observability.logger import RunLogger
 from src.safety.classifier import classify
-from src.types.step_schema import ActionType, Locator, LocatorType, SafetyTier, Step
+from src.types.artifact_schema import (
+    Artifact,
+    ArtifactMetadata,
+    CredentialDefinition,
+    CredentialKind,
+    InputParamDefinition,
+    ParamType,
+)
+from src.types.step_schema import ActionType, CheckpointType, Locator, LocatorType, SafetyTier, Step
 from src.discovery.perception import (
     _COLLECTOR_SOURCE,
     _TAG_FONT,
@@ -1290,3 +1301,384 @@ async def test_confirm_payment_is_irreversible_whatever_the_model_calls_it(page,
     step = Step(sequence_index=1, action=ActionType.CLICK, description="Submit it", locators=derived.locators)
     wording = await element_wording(element.handle)
     assert classify(step, page.url, element_wording=wording) == tier
+
+
+# --- recorder ---
+
+@pytest.fixture
+def run_logger(tmp_path, monkeypatch) -> RunLogger:
+    # Each test logs to its own temporary folder, never the project's evidence folder.
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
+    return RunLogger("DISCOVERY", capability="recorder_test")
+
+
+@pytest.fixture
+def recorder(run_logger) -> Recorder:
+    return Recorder(run_logger)
+
+
+def _log_lines(logger) -> list[dict]:
+    return [json.loads(line) for line in logger.log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _checks(step) -> list[tuple]:
+    return [(checkpoint.type, checkpoint.expected_value) for checkpoint in step.checkpoints]
+
+
+async def _start(recorder, page, path="/login", run=None):
+    await page.goto(path)
+    return await recorder.commit(recorder.draft_start(page.url), page, run or _bank_run(), derived=None)
+
+
+async def _start_on_html(recorder, page, body):
+    await page.set_content(f"{QUIRKS_DOCTYPE}<html><body>{body}</body></html>")
+    return await recorder.commit(recorder.draft_start(page.url), page, _bank_run(), derived=None)
+
+
+async def _draft_on(recorder, page, description_start, action):
+    observation = await observe(page)
+    element = next(element for element in observation.elements if element.description.startswith(description_start))
+    derived = await derive_locators(page, element, _bank_run())
+    step = await recorder.draft_step(action, element.handle, derived, page.url)
+    return element, derived, step
+
+
+async def _open_confirm_page(page, dashboard_popup):
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/10234")
+    await page.goto("/billpay")
+    await page.click("input[type='submit']")
+    await page.wait_for_url("**/billpay/confirm")
+
+
+PAYEE_SELECT = ('<table><tr><td>Payee:</td><td><select name="payee_id">'
+                '<option value="P001">Sunbelt Electric Co</option><option value="P002">Desert Water</option>'
+                '</select></td></tr></table>')
+
+
+# Drafting steps
+
+@pytest.mark.anyio
+async def test_start_step_is_a_safe_navigate_with_no_locators(page, recorder):
+    await page.goto("/login")
+    step = recorder.draft_start(page.url)
+    assert (step.sequence_index, step.action, step.locators, step.safety_tier) == (
+        0, ActionType.NAVIGATE, [], SafetyTier.SAFE)
+
+
+@pytest.mark.anyio
+async def test_start_step_can_only_be_the_first(page, recorder):
+    await _start(recorder, page)
+    with pytest.raises(RecordingError, match="only be the first step"):
+        recorder.draft_start(page.url)
+
+
+@pytest.mark.anyio
+async def test_action_before_the_start_step_is_refused(page, recorder):
+    await page.goto("/login")
+    with pytest.raises(RecordingError, match="start step must be recorded"):
+        await _draft_on(recorder, page, 'button "Log In"', Action(ActionType.CLICK, "Sign in"))
+
+
+@pytest.mark.anyio
+async def test_action_the_model_cannot_take_is_refused(page, recorder):
+    await _start(recorder, page)
+    with pytest.raises(RecordingError, match="not one of the model's recorded actions"):
+        await _draft_on(recorder, page, 'button "Log In"', Action(ActionType.NAVIGATE, "Open a page"))
+
+
+@pytest.mark.anyio
+async def test_typed_text_is_stored_as_written(page, recorder):
+    await _start(recorder, page)
+    _, _, step = await _draft_on(recorder, page, 'text box, left label "Username:"',
+                                 Action(ActionType.TYPE, "Enter the username", "{credential:bank_username}"))
+    assert step.input_value == "{credential:bank_username}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "label, option_value",
+    [
+        pytest.param("Desert Water", "P002", id="fixed choice keeps its hidden value"),
+        pytest.param("{payee_name}", None, id="choice from an input keeps none"),
+        pytest.param("Not a payee", None, id="label not in the dropdown keeps none"),
+    ],
+)
+async def test_dropdown_keeps_a_hidden_value_only_for_a_fixed_choice(page, recorder, label, option_value):
+    await _start_on_html(recorder, page, PAYEE_SELECT)
+    _, _, step = await _draft_on(recorder, page, "dropdown", Action(ActionType.SELECT, "Choose the payee", label))
+    assert (step.input_value, step.option_value) == (label, option_value)
+
+
+@pytest.mark.anyio
+async def test_extract_keeps_its_output_name_and_no_typed_value(page, recorder):
+    await _start_on_html(recorder, page, PAYEE_SELECT)
+    _, _, step = await _draft_on(recorder, page, "dropdown",
+                                 Action(ActionType.EXTRACT_TEXT, "Read the payee", output_key="payee_shown"))
+    assert (step.action, step.output_key, step.input_value) == (ActionType.EXTRACT_TEXT, "payee_shown", None)
+
+
+@pytest.mark.anyio
+async def test_empty_reason_is_recorded_as_missing_never_invented(page, recorder):
+    await _start_on_html(recorder, page, '<a href="/x">Go</a>')
+    _, _, step = await _draft_on(recorder, page, 'link "Go"', Action(ActionType.CLICK, "   "))
+    assert step.description == "click (the model gave no reason)"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "description, tier",
+    [pytest.param('button "Confirm Payment"', SafetyTier.IRREVERSIBLE, id="confirm payment"),
+     pytest.param('link "Cancel"', SafetyTier.SAFE, id="cancel")],
+)
+async def test_recorder_marks_confirm_payment_irreversible_whatever_the_reason_says(
+    page, recorder, dashboard_popup, description, tier
+):
+    await _open_confirm_page(page, dashboard_popup)
+    await recorder.commit(recorder.draft_start(page.url), page, _bank_run(), derived=None)
+    _, _, step = await _draft_on(recorder, page, description, Action(ActionType.CLICK, "Submit it"))
+    assert step.safety_tier == tier
+
+
+# Committing steps
+
+@pytest.mark.anyio
+async def test_start_step_checks_the_page_it_opened(page, recorder):
+    committed = await _start(recorder, page)
+    assert _checks(committed.step) == [
+        (CheckpointType.PAGE_PATH, "/login"),
+        (CheckpointType.PAGE_TITLE, "Sign On - Sunbelt Credit Union"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_click_checks_where_the_page_landed(page, recorder, dashboard_popup):
+    dashboard_popup(False)
+    await _start(recorder, page)
+    await page.fill("input[name='username']", env.mock_bank_username)
+    await page.fill("input[name='password']", env.mock_bank_password.get_secret_value())
+    element, derived, step = await _draft_on(recorder, page, 'button "Log In"', Action(ActionType.CLICK, "Sign in"))
+    await element.handle.click()
+    await page.wait_for_url("**/dashboard")
+    committed = await recorder.commit(step, page, _bank_run(), derived=derived)
+    assert _checks(committed.step) == [
+        (CheckpointType.PAGE_PATH, "/dashboard"),
+        (CheckpointType.PAGE_TITLE, "Dashboard - Sunbelt Credit Union"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_member_in_the_landing_path_becomes_a_placeholder(page, recorder, dashboard_popup):
+    dashboard_popup(False)
+    await _sign_in(page)
+    await _start(recorder, page, "/member/10234")
+    element, derived, step = await _draft_on(recorder, page, 'link "View All Accounts"',
+                                             Action(ActionType.CLICK, "Open the accounts"))
+    await element.handle.click()
+    await page.wait_for_url("**/member/10234/accounts")
+    committed = await recorder.commit(step, page, _bank_run(), derived=derived)
+    assert (CheckpointType.PAGE_PATH, "/member/{member_id}/accounts") in _checks(committed.step)
+
+
+@pytest.mark.anyio
+async def test_title_carrying_an_input_is_left_out(page, recorder):
+    await page.set_content(f"{QUIRKS_DOCTYPE}<html><head><title>Member 10234</title></head>"
+                           "<body><p>Details</p></body></html>")
+    assert await page.title() == "Member 10234"  # the title is really there to be checked
+    committed = await recorder.commit(recorder.draft_start(page.url), page, _bank_run(), derived=None)
+    assert _checks(committed.step) == []
+
+
+@pytest.mark.anyio
+async def test_path_carrying_an_input_inside_a_segment_is_left_out(page, recorder):
+    # /member-10234 can't become a placeholder (not a whole segment), so the check goes.
+    committed = await _start(recorder, page, "/member-10234")
+    assert _checks(committed.step) == [(CheckpointType.PAGE_TITLE, "404 Not Found")]
+
+
+@pytest.mark.anyio
+async def test_secret_in_the_address_is_left_out_and_warned_about(page, recorder, run_logger):
+    run = RunValues(secrets={"bank_password": SecretStr(FAKE_PASSWORD)})
+    committed = await _start(recorder, page, f"/reset/{FAKE_PASSWORD}", run=run)
+    assert all(kind != CheckpointType.PAGE_PATH for kind, _ in _checks(committed.step))
+    assert committed.secrets_found == ["bank_password"]
+    warning = next(line for line in _log_lines(run_logger) if line["event_type"] == "SECRET_ON_PAGE")
+    assert (warning["secrets"], warning["found_in"]) == (["bank_password"], "page address or title")
+    assert FAKE_PASSWORD not in run_logger.log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_next_step_check_goes_on_the_previous_step_never_the_last(page, recorder):
+    await _start_on_html(recorder, page, '<a href="#one">One</a> <a href="#two">Two</a>')
+    for name in ("One", "Two"):
+        _, derived, step = await _draft_on(recorder, page, f'link "{name}"', Action(ActionType.CLICK, f"Open {name}"))
+        await recorder.commit(step, page, _bank_run(), derived=derived)
+    next_checks = [
+        sum(checkpoint.type == CheckpointType.NEXT_STEP_TARGET for checkpoint in step.checkpoints)
+        for step in recorder.steps
+    ]
+    assert next_checks == [1, 1, 0]
+
+
+@pytest.mark.anyio
+async def test_checking_step_gets_no_page_checks(page, recorder):
+    await _start(recorder, page)
+    drafted = await recorder.draft_assertion("authorized personnel only", "Check the notice", page, _bank_run())
+    committed = await recorder.commit(drafted.step, page, _bank_run(), derived=drafted.derived)
+    assert _checks(committed.step) == []
+
+
+@pytest.mark.anyio
+async def test_irreversible_step_is_recorded_unclicked_with_no_checks(page, recorder, run_logger):
+    await _start(recorder, page)
+    _, derived, step = await _draft_on(recorder, page, 'button "Log In"', Action(ActionType.CLICK, "Sign in"))
+    committed = await recorder.commit(step, page, _bank_run(), derived=derived, acted=False)
+    assert committed.step.checkpoints == []
+    assert _log_lines(run_logger)[-1]["acted"] is False
+
+
+@pytest.mark.anyio
+async def test_step_committed_out_of_order_is_refused(page, recorder):
+    await _start(recorder, page)
+    _, derived, first = await _draft_on(recorder, page, 'button "Log In"', Action(ActionType.CLICK, "Sign in"))
+    _, _, stale = await _draft_on(recorder, page, 'button "Log In"', Action(ActionType.CLICK, "Sign in again"))
+    await recorder.commit(first, page, _bank_run(), derived=derived)
+    with pytest.raises(RecordingError, match="out of order"):
+        await recorder.commit(stale, page, _bank_run(), derived=derived)
+
+
+@pytest.mark.anyio
+async def test_commit_requires_the_derived_locators_argument(page, recorder):
+    # Keyword-only and required, so the run log always gets the locator details.
+    await page.goto("/login")
+    with pytest.raises(TypeError):
+        await recorder.commit(recorder.draft_start(page.url), page, _bank_run())
+
+
+# Assertions by text
+
+@pytest.mark.anyio
+async def test_unique_phrase_becomes_a_checking_step(page, recorder):
+    await _start(recorder, page)
+    drafted = await recorder.draft_assertion("authorized personnel only", "Check the notice", page, _bank_run())
+    step = drafted.step
+    assert (step.action, step.input_value, step.sequence_index) == (
+        ActionType.ASSERT_TEXT, "authorized personnel only", 1)
+    assert step.locators
+    for locator in step.locators:
+        found = resolve(page, locator, {})
+        assert await found.count() == 1
+        assert await shows_phrase(await found.element_handle(), "authorized personnel only")
+
+
+REFUSAL_PAGE = ('<div>Payment submitted</div><div>Payment submitted</div>'
+                '<div style="display:none">Receipt ready</div>')
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "phrase, message",
+    [
+        pytest.param("   ", "needs the text", id="empty"),
+        pytest.param("Nothing like this", "no visible element shows", id="not shown"),
+        pytest.param("Payment submitted", "shown by 2 elements", id="shown twice"),
+        pytest.param("Receipt ready", "no visible element shows", id="only hidden"),
+    ],
+)
+async def test_assertion_is_refused_with_a_reason_for_the_model(page, recorder, phrase, message):
+    await _start_on_html(recorder, page, REFUSAL_PAGE)
+    with pytest.raises(AssertionRefused, match=message):
+        await recorder.draft_assertion(phrase, "Check", page, _bank_run())
+
+
+@pytest.mark.anyio
+async def test_confirm_payment_phrase_is_refused_on_the_real_confirm_page(page, recorder, dashboard_popup):
+    # The panel title and the button both show it; the prompt must ask for a phrase shown once.
+    await _open_confirm_page(page, dashboard_popup)
+    await recorder.commit(recorder.draft_start(page.url), page, _bank_run(), derived=None)
+    with pytest.raises(AssertionRefused, match="shown by 2 elements"):
+        await recorder.draft_assertion("Confirm Payment", "Check the confirm page", page, _bank_run())
+
+
+# The run log and the whole recording
+
+@pytest.mark.anyio
+async def test_each_commit_writes_one_step_recorded_line(page, recorder, run_logger):
+    await _start(recorder, page)
+    _, derived, step = await _draft_on(recorder, page, 'text box, left label "Username:"',
+                                       Action(ActionType.TYPE, "Enter the username", "{credential:bank_username}"))
+    await recorder.commit(step, page, _bank_run(), derived=derived)
+    lines = _log_lines(run_logger)
+    assert [line["event_type"] for line in lines] == ["STEP_RECORDED", "STEP_RECORDED"]
+    recorded = lines[1]
+    assert [locator["kind"] for locator in recorded["locators"]] == derived.kinds
+    assert recorded["rejected"] == [{"kind": r.kind, "reason": r.reason} for r in derived.rejected]
+    assert (recorded["weak"], recorded["next_step_check_added_to"]) == (False, 0)
+    assert recorded["input_value"] == "{credential:bank_username}"
+
+
+@pytest.mark.anyio
+async def test_a_whole_recording_on_the_bank_is_a_valid_artifact(page, recorder, run_logger, dashboard_popup):
+    dashboard_popup(False)
+    run = _bank_run()
+    await _start(recorder, page)
+
+    async def record(description, action, perform=None, lands_on=None, acted=True):
+        element, derived, step = await _draft_on(recorder, page, description, action)
+        if acted:
+            await perform(element.handle)
+            if lands_on:
+                await page.wait_for_url(lands_on)
+        await recorder.commit(step, page, run, derived=derived, acted=acted)
+
+    await record('text box, left label "Username:"',
+                 Action(ActionType.TYPE, "Enter the username", "{credential:bank_username}"),
+                 lambda handle: handle.fill(env.mock_bank_username))
+    await record("password box", Action(ActionType.TYPE, "Enter the password", "{credential:bank_password}"),
+                 lambda handle: handle.fill(env.mock_bank_password.get_secret_value()))
+    await record('button "Log In"', Action(ActionType.CLICK, "Sign in"),
+                 lambda handle: handle.click(), "**/dashboard")
+    await record('link "Member Search"', Action(ActionType.CLICK, "Open member search"),
+                 lambda handle: handle.click(), "**/search")
+    await record('text box, left label "Member ID:"', Action(ActionType.TYPE, "Enter the member", "{member_id}"),
+                 lambda handle: handle.fill("10234"))
+    await record('button "Search"', Action(ActionType.CLICK, "Search"),
+                 lambda handle: handle.click(), "**/member/10234")
+    await record('link "Bill Pay"', Action(ActionType.CLICK, "Open Bill Pay"),
+                 lambda handle: handle.click(), "**/billpay")
+    await record("dropdown", Action(ActionType.SELECT, "Choose the payee", "{payee_name}"),
+                 lambda handle: handle.select_option(label="Sunbelt Electric Co"))
+    await record('text box, left label "Amount:"', Action(ActionType.TYPE, "Enter the amount", "{amount}"),
+                 lambda handle: handle.fill("50.00"))
+    await record('button "Continue"', Action(ActionType.CLICK, "Continue"),
+                 lambda handle: handle.click(), "**/billpay/confirm")
+    drafted = await recorder.draft_assertion("Amount:", "Check the confirmation", page, run)
+    await recorder.commit(drafted.step, page, run, derived=drafted.derived)
+    await record('button "Confirm Payment"', Action(ActionType.CLICK, "Submit it"), acted=False)
+
+    now = datetime.now(timezone.utc)
+    artifact = Artifact(
+        metadata=ArtifactMetadata(
+            capability="member_servicing_and_bill_pay",
+            description="For member {member_id}, pay {amount} to {payee_name}.",
+            version="1.0.0",
+            target_url=f"{env.mock_bank_base_url}/login",
+            created_timestamp=now,
+            last_updated_timestamp=now,
+        ),
+        input_parameters=[
+            InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID"),
+            InputParamDefinition(key="amount", type=ParamType.NUMBER, description="Amount to pay"),
+            InputParamDefinition(key="payee_name", type=ParamType.STRING, description="Payee"),
+        ],
+        credentials=[
+            CredentialDefinition(key="bank_username", kind=CredentialKind.CONFIG, description="Teller username"),
+            CredentialDefinition(key="bank_password", kind=CredentialKind.SECRET, description="Teller password"),
+        ],
+        steps=recorder.steps,
+    )
+    assert len(artifact.steps) == 13
+    assert artifact.steps[-1].safety_tier == SafetyTier.IRREVERSIBLE
+    assert artifact.steps[-1].checkpoints == []
+    assert env.mock_bank_password.get_secret_value() not in run_logger.log_path.read_text(encoding="utf-8")

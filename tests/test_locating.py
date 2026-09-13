@@ -1,7 +1,7 @@
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
-from src.locating.checks import element_wording
+from src.locating.checks import element_wording, find_phrase, phrase_matches, shows_phrase
 from src.locating.resolver import UnfillableLocator, css_string, fill, resolve
 from src.types.step_schema import Locator, LocatorType
 
@@ -140,3 +140,59 @@ async def test_element_wording_never_reads_a_password_or_typed_value(page):
     await page.fill("#t", "10234")
     assert await element_wording(await page.query_selector("#p")) == []
     assert await element_wording(await page.query_selector("#t")) == []
+
+
+# --- assertion text: one rule for discovery and replay ---
+
+@pytest.mark.parametrize(
+    "text, phrase, matches",
+    [
+        pytest.param("Payment submitted - Ref 88121", "Payment submitted", True, id="data after the phrase"),
+        pytest.param("Ref 88121: payment submitted", "Payment submitted", True, id="data before, any case"),
+        pytest.param("Payment of $50.00 submitted", "Payment submitted", False, id="data in the middle"),
+        pytest.param("Payment", "Pay", False, id="not inside a longer word"),
+        pytest.param("Payment   submitted", "payment submitted", True, id="nbsp and runs of spaces"),
+        pytest.param("Amount: $50.00", "Amount:", True, id="phrase ending in punctuation"),
+        pytest.param("Total Amount:", "Amount:", True, id="at the end of the text"),
+        pytest.param("Anything at all", "   ", False, id="empty phrase"),
+    ],
+)
+def test_phrase_matches_whole_words_in_any_case(text, phrase, matches):
+    assert phrase_matches(text, phrase) is matches
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body, shown",
+    [
+        pytest.param('<div id="t">Payment submitted</div>', True, id="visible"),
+        pytest.param('<input id="t" type="submit" value="Payment submitted">', True, id="button by its value"),
+        pytest.param('<div id="t" style="display:none">Payment submitted</div>', False, id="display none"),
+        pytest.param('<div id="t" style="visibility:hidden">Payment submitted</div>', False, id="visibility hidden"),
+        pytest.param('<div id="t" style="width:0;height:0;overflow:hidden">Payment submitted</div>', False,
+                     id="zero size"),
+    ],
+)
+async def test_shows_phrase_needs_a_visible_element(page, body, shown):
+    # A hidden element's visible-text property falls back to its hidden text, so this
+    # must fail on visibility, not on the text.
+    await _set_page(page, body)
+    assert await shows_phrase(await page.query_selector("#t"), "payment submitted") is shown
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        pytest.param('<div id="outer"><div id="inner"><b>Payment</b> submitted</div></div>', ["inner"],
+                     id="innermost element only"),
+        pytest.param('<div id="hidden" style="display:none">Payment submitted</div>'
+                     '<div id="shown">Payment submitted</div>', ["shown"], id="hidden copy ignored"),
+        pytest.param('<div id="one">Payment submitted</div><div id="two">Payment submitted</div>',
+                     ["one", "two"], id="both visible copies"),
+    ],
+)
+async def test_find_phrase_returns_the_innermost_visible_matches(page, body, expected):
+    await _set_page(page, body)
+    found = await find_phrase(page, "Payment submitted")
+    assert [await handle.get_attribute("id") for handle in found] == expected
