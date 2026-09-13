@@ -9,8 +9,14 @@ class Settings(BaseModel):
     evidence_dir: Path = Path(env.evidence_dir).resolve()
 
     # System-level execution timeouts (not per-step)
-    discovery_max_steps: int = 20
-    discovery_timeout_ms: int = 300_000        # 5 minutes total
+    # Steps catch fast loops, wall-clock catches slow hangs (D033)
+    discovery_max_steps: int = 40
+    discovery_timeout_ms: int = 900_000        # 15 minutes total
+
+    # Each call gets min(cap, time left); SDK auto-retry is off in discovery (D033)
+    discovery_llm_call_timeout_ms: int = 90_000
+    discovery_page_action_timeout_ms: int = 30_000
+    discovery_llm_retries: int = 1
     replay_checkpoint_timeout_ms: int = 10_000  # 10 seconds per checkpoint
     replay_total_timeout_ms: int = 120_000      # 2 minutes total
 

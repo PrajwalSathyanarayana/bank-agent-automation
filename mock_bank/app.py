@@ -27,7 +27,7 @@ def load_member_data() -> dict:
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = env.mock_bank_secret_key
+    app.config["SECRET_KEY"] = env.mock_bank_secret_key.get_secret_value()
     # New value every startup; sessions from a previous run are rejected (D028).
     app.config["BOOT_ID"] = secrets.token_hex(8)
     app.config["MEMBER_DATA"] = load_member_data()
