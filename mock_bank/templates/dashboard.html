@@ -6,11 +6,14 @@
   <div class="panel-title">Staff Dashboard</div>
   <div class="panel-body">
     <table class="grid" cellpadding="0" cellspacing="0">
-      <tr><th>Metric</th><th width="80">Today</th></tr>
-      <tr><td>Members Serviced Today</td><td>0</td></tr>
-      <tr class="alt"><td>Pending Bill Payments</td><td>0</td></tr>
-      <tr><td>Open Service Requests</td><td>0</td></tr>
+      <tr><th>Metric</th><th width="80">Count</th></tr>
+      <tr><td>Members Looked Up</td><td>{{ activity.members_viewed }}</td></tr>
+      <tr class="alt"><td>Bill Payments Completed</td><td>{{ activity.payments_completed }}</td></tr>
+      <tr><td>Bill Payments Total</td><td>${{ "%.2f"|format(activity.payments_total) }}</td></tr>
+      <tr class="alt"><td>Bill Pay Attempts Blocked (Restricted)</td><td>{{ activity.payments_blocked }}</td></tr>
+      <tr><td>Members with Restricted Accounts</td><td>{{ restricted_members }}</td></tr>
     </table>
+    <div class="fineprint">Figures since system start.</div>
   </div>
 </div>
 <div class="panel">

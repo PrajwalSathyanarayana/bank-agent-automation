@@ -13,16 +13,40 @@ from flask import Flask
 
 from src.config.env import env
 
+from blueprints.activity import Activity
 from blueprints.auth import auth_bp
 from blueprints.member import member_bp
 from blueprints.billpay import billpay_bp
 
 DATA_PATH = Path(__file__).parent / "data" / "members.json"
+ACCOUNT_STATUSES = {"active", "restricted"}
 
 
 def load_member_data() -> dict:
     with open(DATA_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    check_member_data(data)
+    return data
+
+
+def check_member_data(data: dict) -> None:
+    """Refuses to start on contradictory data, so a data edit can't break the rules."""
+    for member_id, member in data["members"].items():
+        inactive = member["membership_status"] == "inactive"
+        if inactive != bool(member.get("inactive_reason")):
+            raise ValueError(
+                f"member {member_id}: inactive_reason must be set exactly when membership is inactive"
+            )
+        for account in member["accounts"]:
+            if account["status"] not in ACCOUNT_STATUSES:
+                raise ValueError(
+                    f"member {member_id}: unknown account status {account['status']!r}"
+                )
+            if inactive and account["status"] != "restricted":
+                raise ValueError(
+                    f"member {member_id}: inactive membership but account "
+                    f"{account['account_id']} is not restricted"
+                )
 
 
 def create_app() -> Flask:
@@ -31,6 +55,7 @@ def create_app() -> Flask:
     # New value every startup; sessions from a previous run are rejected.
     app.config["BOOT_ID"] = secrets.token_hex(8)
     app.config["MEMBER_DATA"] = load_member_data()
+    app.config["ACTIVITY"] = Activity()
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(member_bp)
@@ -44,4 +69,5 @@ if __name__ == "__main__":
     # Bind to MOCK_BANK_BASE_URL's host/port so the printed link, the
     # allowlist's permitted domain, and the config always agree.
     base = urlparse(env.mock_bank_base_url)
-    app.run(host=base.hostname, port=base.port or 5000, debug=True)
+    # Debug off: no in-browser code console, no auto-reload wiping state mid-run.
+    app.run(host=base.hostname, port=base.port or 5000, debug=False)

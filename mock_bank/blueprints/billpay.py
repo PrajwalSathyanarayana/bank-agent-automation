@@ -1,5 +1,6 @@
 from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
 
+from .activity import current_activity
 from .auth import login_required
 
 billpay_bp = Blueprint("billpay", __name__)
@@ -29,6 +30,17 @@ def _primary_checking_account(member):
     return member["accounts"][0]
 
 
+def _is_restricted(member):
+    # Checked at every bill pay step, not just the form, so no request can move money.
+    return _primary_checking_account(member)["status"] == "restricted"
+
+
+def _render_restricted(member):
+    # Confirm-step refusals redirect here, so each blocked attempt is counted once.
+    current_activity().payment_blocked()
+    return render_template("billpay.html", member=member, payees=[], restricted=True), 200
+
+
 @billpay_bp.route("/billpay", methods=["GET"])
 @login_required
 def billpay():
@@ -38,6 +50,8 @@ def billpay():
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
+    if _is_restricted(member):
+        return _render_restricted(member)
 
     return render_template(
         "billpay.html",
@@ -57,6 +71,8 @@ def billpay_submit():
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
+    if _is_restricted(member):
+        return _render_restricted(member)
 
     payee_id = request.form.get("payee_id", "")
     amount_raw = request.form.get("amount", "")
@@ -104,6 +120,10 @@ def billpay_confirm():
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
+    if _is_restricted(member):
+        # A payment left pending from before the restriction is dropped, not confirmed.
+        session.pop("pending_payment", None)
+        return redirect(url_for("billpay.billpay"))
 
     payee = _get_payee(pending_payment["payee_id"])
     return render_template(
@@ -125,10 +145,14 @@ def billpay_confirm_submit():
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
+    if _is_restricted(member):
+        session.pop("pending_payment", None)
+        return redirect(url_for("billpay.billpay"))
 
     payee = _get_payee(pending_payment["payee_id"])
     checking = _primary_checking_account(member)
     checking["balance"] -= pending_payment["amount"]
+    current_activity().payment_completed(pending_payment["amount"])
 
     session.pop("pending_payment", None)
 

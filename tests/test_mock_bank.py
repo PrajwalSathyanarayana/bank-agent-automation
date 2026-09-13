@@ -1,10 +1,11 @@
+import copy
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mock_bank"))
-from app import create_app  # noqa: E402
+from app import check_member_data, create_app, load_member_data  # noqa: E402
 
 
 @pytest.fixture
@@ -263,3 +264,125 @@ def test_sign_off_link_hidden_when_not_logged_in(client):
 def test_sign_off_link_shown_when_logged_in(logged_in_client):
     resp = logged_in_client.get("/dashboard")
     assert b"Sign Off" in resp.data
+
+
+# --- inactive membership means restricted accounts ---
+
+def _checking_balance(app, member_id):
+    return app.config["MEMBER_DATA"]["members"][member_id]["accounts"][0]["balance"]
+
+
+def test_member_detail_shows_restriction_notice_for_inactive_member(logged_in_client):
+    resp = logged_in_client.get("/member/30891")
+    assert b"Membership inactive" in resp.data
+    assert b"auto loan charged off" in resp.data
+
+
+def test_member_detail_has_no_notice_for_active_member(logged_in_client):
+    resp = logged_in_client.get("/member/10234")
+    assert b"Membership inactive" not in resp.data
+
+
+def test_inactive_member_accounts_show_restricted(logged_in_client):
+    resp = logged_in_client.get("/member/30891/accounts")
+    assert resp.data.count(b"<td>restricted</td>") == 2
+    assert b"<td>active</td>" not in resp.data
+
+
+def test_billpay_form_replaced_by_notice_for_restricted_member(logged_in_client):
+    logged_in_client.get("/member/30891")
+    resp = logged_in_client.get("/billpay")
+    assert resp.status_code == 200
+    assert b"Bill Pay unavailable" in resp.data
+    assert b'name="payee_id"' not in resp.data
+
+
+def test_billpay_submit_refused_for_restricted_member(app, logged_in_client):
+    # A direct POST must not get past the block the form page shows.
+    logged_in_client.get("/member/30891")
+    resp = logged_in_client.post("/billpay", data={"payee_id": "P001", "amount": "50.00"})
+    assert b"Bill Pay unavailable" in resp.data
+    assert _checking_balance(app, "30891") == 130.00
+    with logged_in_client.session_transaction() as sess:
+        assert "pending_payment" not in sess
+
+
+def test_pending_payment_dropped_if_account_restricted_before_confirm(app, logged_in_client):
+    logged_in_client.get("/member/10234")
+    logged_in_client.post("/billpay", data={"payee_id": "P001", "amount": "50.00"})
+    app.config["MEMBER_DATA"]["members"]["10234"]["accounts"][0]["status"] = "restricted"
+    resp = logged_in_client.post("/billpay/confirm")
+    assert resp.headers["Location"] == "/billpay"
+    assert _checking_balance(app, "10234") == 2450.32
+    with logged_in_client.session_transaction() as sess:
+        assert "pending_payment" not in sess
+
+
+# --- live dashboard metrics ---
+
+def _dashboard(client):
+    return client.get("/dashboard").data
+
+
+def test_dashboard_starts_at_zero_and_counts_restricted_members(logged_in_client):
+    page = _dashboard(logged_in_client)
+    assert b"<td>Members Looked Up</td><td>0</td>" in page
+    assert b"<td>Bill Payments Completed</td><td>0</td>" in page
+    assert b"<td>Bill Payments Total</td><td>$0.00</td>" in page
+    assert b"<td>Members with Restricted Accounts</td><td>1</td>" in page
+
+
+def test_dashboard_counts_distinct_members_looked_up(logged_in_client):
+    logged_in_client.get("/member/10234")
+    logged_in_client.get("/member/10234/accounts")
+    logged_in_client.get("/member/20567")
+    assert b"<td>Members Looked Up</td><td>2</td>" in _dashboard(logged_in_client)
+
+
+def test_dashboard_counts_completed_payment_and_total(logged_in_client):
+    logged_in_client.get("/member/20567")
+    logged_in_client.post("/billpay", data={"payee_id": "P001", "amount": "100.00"})
+    logged_in_client.post("/billpay/confirm")
+    page = _dashboard(logged_in_client)
+    assert b"<td>Bill Payments Completed</td><td>1</td>" in page
+    assert b"<td>Bill Payments Total</td><td>$100.00</td>" in page
+
+
+def test_payment_not_counted_until_confirmed(logged_in_client):
+    logged_in_client.get("/member/20567")
+    logged_in_client.post("/billpay", data={"payee_id": "P001", "amount": "100.00"})
+    assert b"<td>Bill Payments Completed</td><td>0</td>" in _dashboard(logged_in_client)
+
+
+def test_dashboard_counts_blocked_bill_pay_attempts(logged_in_client):
+    logged_in_client.get("/member/30891")
+    logged_in_client.get("/billpay")
+    logged_in_client.post("/billpay", data={"payee_id": "P001", "amount": "50.00"})
+    page = _dashboard(logged_in_client)
+    assert b"<td>Bill Pay Attempts Blocked (Restricted)</td><td>2</td>" in page
+
+
+def test_seed_data_passes_the_startup_check():
+    check_member_data(load_member_data())  # should not raise
+
+
+def _seed_with(edit):
+    data = copy.deepcopy(load_member_data())
+    edit(data["members"])
+    return data
+
+
+@pytest.mark.parametrize(
+    "edit, message",
+    [
+        (lambda m: m["30891"]["accounts"][0].update(status="active"), "is not restricted"),
+        (lambda m: m["30891"].pop("inactive_reason"), "inactive_reason"),
+        (lambda m: m["10234"].update(inactive_reason="Dormant"), "inactive_reason"),
+        (lambda m: m["10234"]["accounts"][0].update(status="closed"), "unknown account status"),
+    ],
+    ids=["inactive_with_active_account", "inactive_without_reason",
+         "active_with_reason", "unknown_status"],
+)
+def test_startup_check_rejects_contradictory_data(edit, message):
+    with pytest.raises(ValueError, match=message):
+        check_member_data(_seed_with(edit))

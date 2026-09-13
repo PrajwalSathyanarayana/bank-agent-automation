@@ -78,12 +78,13 @@
       },
       "member_since": "2015-11-30",
       "membership_status": "inactive",
+      "inactive_reason": "Services restricted: auto loan charged off, loss to the credit union. Contact Collections.",
       "accounts": [
         {
           "account_id": "CHK-30891-01",
           "account_type": "checking",
           "balance": 130.00,
-          "status": "active",
+          "status": "restricted",
           "is_primary": true,
           "last_transaction_date": "2025-12-15"
         },
@@ -91,7 +92,7 @@
           "account_id": "SAV-30891-01",
           "account_type": "savings",
           "balance": 4300.00,
-          "status": "active",
+          "status": "restricted",
           "is_primary": false,
           "last_transaction_date": "2025-12-15"
         }

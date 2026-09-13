@@ -3,9 +3,15 @@
 {% block breadcrumb %}<a href="/">Home</a> &raquo; Transactions &raquo; Bill Pay{% endblock %}
 {% block content %}
 {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
+{% if restricted %}
+<div class="msg-error">Bill Pay unavailable &mdash; the paying account is restricted.{% if member.inactive_reason %} Reason: {{ member.inactive_reason }}{% endif %}</div>
+{% endif %}
 <div class="panel">
   <div class="panel-title">Bill Pay &mdash; {{ member.first_name }} {{ member.last_name }}</div>
   <div class="panel-body">
+    {% if restricted %}
+    <p>No payments can be made from this member's accounts.</p>
+    {% else %}
     <form method="POST" action="/billpay">
       <table class="form" cellpadding="0" cellspacing="0" border="0">
         <tr>
@@ -33,6 +39,7 @@
       </table>
     </form>
     <div class="fineprint">Payments submitted after 4:00 PM are processed the next business day.</div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

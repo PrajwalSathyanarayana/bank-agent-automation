@@ -2,6 +2,7 @@ import random
 
 from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
 
+from .activity import current_activity
 from .auth import login_required
 
 member_bp = Blueprint("member", __name__)
@@ -9,6 +10,16 @@ member_bp = Blueprint("member", __name__)
 
 def _get_member(member_id):
     return current_app.config["MEMBER_DATA"]["members"].get(member_id)
+
+
+def _open_member(member_id):
+    session["current_member_id"] = member_id
+    current_activity().member_viewed(member_id)
+
+
+def _restricted_member_count():
+    members = current_app.config["MEMBER_DATA"]["members"].values()
+    return sum(any(a["status"] == "restricted" for a in m["accounts"]) for m in members)
 
 
 def _primary_account(member):
@@ -22,7 +33,12 @@ def _primary_account(member):
 @login_required
 def dashboard():
     show_popup = random.random() < 0.5
-    return render_template("dashboard.html", show_popup=show_popup)
+    return render_template(
+        "dashboard.html",
+        show_popup=show_popup,
+        activity=current_activity().snapshot(),
+        restricted_members=_restricted_member_count(),
+    )
 
 
 @member_bp.route("/search", methods=["GET"])
@@ -39,7 +55,7 @@ def search_submit():
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
-    session["current_member_id"] = member_id
+    _open_member(member_id)
     return redirect(url_for("member.member_detail", member_id=member_id))
 
 
@@ -49,7 +65,7 @@ def member_detail(member_id):
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
-    session["current_member_id"] = member_id
+    _open_member(member_id)
     primary_account = _primary_account(member)
     return render_template("member_detail.html", member=member, primary_account=primary_account)
 
@@ -60,7 +76,7 @@ def member_edit(member_id):
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
-    session["current_member_id"] = member_id
+    _open_member(member_id)
     return render_template("member_edit.html", member=member, saved=False)
 
 
@@ -73,7 +89,7 @@ def member_edit_submit(member_id):
 
     member["email"] = request.form.get("email", member["email"])
     member["phone"] = request.form.get("phone", member["phone"])
-    session["current_member_id"] = member_id
+    _open_member(member_id)
     return render_template("member_edit.html", member=member, saved=True)
 
 
@@ -83,7 +99,7 @@ def member_accounts(member_id):
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
-    session["current_member_id"] = member_id
+    _open_member(member_id)
     return render_template("member_accounts.html", member=member)
 
 

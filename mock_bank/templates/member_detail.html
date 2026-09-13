@@ -2,6 +2,9 @@
 {% block title %}Member Detail{% endblock %}
 {% block breadcrumb %}<a href="/">Home</a> &raquo; Member Services &raquo; Member Detail{% endblock %}
 {% block content %}
+{% if member.membership_status == "inactive" %}
+<div class="msg-error">Membership inactive &mdash; all accounts restricted. Reason: {{ member.inactive_reason }}</div>
+{% endif %}
 <div class="panel">
   <div class="panel-title">Member Detail</div>
   <div class="panel-body">
