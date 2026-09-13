@@ -167,6 +167,16 @@ class Artifact(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_navigate_only_first(self) -> "Artifact":
+        # A navigate step means "open the start URL", which only makes sense at the start.
+        for step in self.steps[1:]:
+            if step.action == ActionType.NAVIGATE:
+                raise ValueError(
+                    f"step {step.sequence_index}: a navigate step may only be the first step"
+                )
+        return self
+
+    @model_validator(mode="after")
     def validate_last_step_has_no_next_step_check(self) -> "Artifact":
         last = self.steps[-1]
         if any(c.type == CheckpointType.NEXT_STEP_TARGET for c in last.checkpoints):

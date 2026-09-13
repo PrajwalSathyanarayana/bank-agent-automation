@@ -102,7 +102,8 @@ class Step(BaseModel):
     sequence_index: int = Field(ge=0)
     action: ActionType
     description: str = Field(min_length=1)
-    locators: list[Locator] = Field(min_length=1)
+    # At least one for every action except NAVIGATE, which locates nothing (validator below).
+    locators: list[Locator] = Field(default_factory=list)
     safety_tier: SafetyTier = SafetyTier.SAFE
     input_value: Optional[str] = None
     checkpoints: list[StepCheckpoint] = Field(default_factory=list)
@@ -119,6 +120,19 @@ class Step(BaseModel):
         description="Hidden value of a fixed dropdown option. "
         "Forbidden when the selection comes from an input.",
     )
+
+    @model_validator(mode="after")
+    def validate_navigate_locates_nothing(self) -> "Step":
+        # NAVIGATE opens the artifact's start URL (or the tenant's override), which lives
+        # only in the metadata; every other action works on an element.
+        if self.action == ActionType.NAVIGATE:
+            if self.locators:
+                raise ValueError("a navigate step opens the start URL and has no locators")
+            if self.input_value is not None:
+                raise ValueError("a navigate step has no input_value; the start URL is in the metadata")
+        elif not self.locators:
+            raise ValueError(f"a {self.action.value} step needs at least one locator")
+        return self
 
     @model_validator(mode="after")
     def validate_output_key_matches_extract_text(self) -> "Step":

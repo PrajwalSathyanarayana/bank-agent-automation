@@ -78,13 +78,32 @@ def test_step_constructs_with_valid_data():
 
 
 def test_step_requires_at_least_one_locator():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="needs at least one locator"):
         Step(
             sequence_index=0,
             action=ActionType.CLICK,
             description="Click something",
             locators=[],
         )
+
+
+def _navigate_step(**fields) -> Step:
+    return Step(sequence_index=0, action=ActionType.NAVIGATE, description="Open the portal", **fields)
+
+
+def test_navigate_step_has_no_locators():
+    assert _navigate_step().locators == []
+
+
+def test_navigate_step_with_a_locator_rejected():
+    with pytest.raises(ValidationError, match="has no locators"):
+        _navigate_step(locators=[_valid_locator()])
+
+
+def test_navigate_step_with_an_address_rejected():
+    # The start URL lives only in the metadata, so a tenant's override applies.
+    with pytest.raises(ValidationError, match="no input_value"):
+        _navigate_step(input_value="http://localhost:5000/login")
 
 
 def test_step_rejects_negative_sequence_index():
@@ -201,6 +220,17 @@ def test_next_step_target_on_the_last_step_rejected():
             metadata=_valid_metadata(),
             steps=[_valid_step(0), _step_checking_next_target(1)],
         )
+
+
+def test_artifact_starting_with_a_navigate_step_accepted():
+    artifact = Artifact(metadata=_valid_metadata(), steps=[_navigate_step(), _valid_step(1)])
+    assert artifact.steps[0].action == ActionType.NAVIGATE
+
+
+def test_navigate_step_after_the_first_rejected():
+    later = Step(sequence_index=1, action=ActionType.NAVIGATE, description="Open the portal again")
+    with pytest.raises(ValidationError, match="only be the first step"):
+        Artifact(metadata=_valid_metadata(), steps=[_valid_step(0), later])
 
 
 # --- Artifact schema ---
