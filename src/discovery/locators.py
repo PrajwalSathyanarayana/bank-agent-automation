@@ -262,7 +262,7 @@ def scan(candidate: Candidate, run: RunValues) -> ScanOutcome:
 
     stored_address = None
     if candidate.address is not None:
-        stored_address = _parameterize_address(candidate.address, run.text_inputs)
+        stored_address = parameterize_address(candidate.address, run.text_inputs)
         if stored_address is None:
             return ScanOutcome(None, "its address matches two inputs in one segment")
 
@@ -329,8 +329,10 @@ def _all_data(candidate: Candidate) -> list[str]:
     return [*candidate.data, *([candidate.address] if candidate.address is not None else [])]
 
 
-def _parameterize_address(address: str, text_inputs: Mapping[str, str]) -> Optional[str]:
+def parameterize_address(address: str, text_inputs: Mapping[str, str]) -> Optional[str]:
     """The address with each whole path segment equal to a text input as a placeholder.
+
+    Shared with the recorder's page-path checkpoint, so both treat addresses alike.
 
     Literal braces are doubled first so they can't be read as placeholders. Returns None
     when a segment equals two inputs: which one it stands for can't be known.

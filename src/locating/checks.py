@@ -1,5 +1,18 @@
 """Reading the page the same way in discovery and replay."""
-from playwright.async_api import ElementHandle
+import re
+
+from playwright.async_api import ElementHandle, Page
+
+_SHOWN_TEXT = """(element) => {
+  // Visible means rendered, not visibility:hidden, and with a size. innerText can't be
+  // trusted alone: for an element that isn't rendered it falls back to the hidden text.
+  const box = element.getBoundingClientRect();
+  const visible = element.checkVisibility()
+    && getComputedStyle(element).visibility === "visible"
+    && box.width > 0 && box.height > 0;
+  const isButton = element.tagName === "INPUT" && ["submit", "button", "reset"].includes(element.type);
+  return { visible: visible, text: isButton ? (element.value || "") : (element.innerText || "") };
+}"""
 
 _WORDING = """(element) => {
   const words = [element.textContent || ""];
@@ -23,3 +36,49 @@ async def element_wording(element: ElementHandle) -> list[str]:
     doesn't depend on which locators survived or how the model described the step.
     """
     return await element.evaluate(_WORDING)
+
+
+def phrase_matches(text: str, phrase: str) -> bool:
+    """Whether the phrase appears in the text as whole words, ignoring case.
+
+    Runs of whitespace, &nbsp; included, count as one space on both sides. "Pay" never
+    matches inside "Payment", but "Payment submitted" matches in "Payment submitted -
+    Ref 88121": data before or after the phrase doesn't stop it.
+    """
+    words = phrase.split()
+    if not words:
+        return False
+    body = r"\s+".join(re.escape(word) for word in words)
+    # Word boundaries only where the phrase starts or ends with a word character, so a
+    # phrase like "Amount:" still matches before a space or the end of the text.
+    start = r"(?<!\w)" if re.match(r"\w", words[0]) else ""
+    end = r"(?!\w)" if re.search(r"\w$", words[-1]) else ""
+    return re.search(start + body + end, text, re.IGNORECASE) is not None
+
+
+async def shows_phrase(element: ElementHandle, phrase: str) -> bool:
+    """Whether the element is visible and its visible text shows the phrase.
+
+    The assertion rule for both modes: discovery uses it to find and confirm an
+    assertion, replay to check the element its stored locators found. A button input's
+    text is its value.
+    """
+    shown = await element.evaluate(_SHOWN_TEXT)
+    return shown["visible"] and phrase_matches(shown["text"], phrase)
+
+
+async def find_phrase(page: Page, phrase: str) -> list[ElementHandle]:
+    """The innermost visible elements showing the phrase.
+
+    Playwright's loose text lookup (any case, a substring, innermost elements) finds
+    every possible element; the stricter rule above keeps only real matches. Handles
+    that don't match are released here; the caller releases the ones returned.
+    """
+    candidates = await page.get_by_text(" ".join(phrase.split())).element_handles()
+    found = []
+    for handle in candidates:
+        if await shows_phrase(handle, phrase):
+            found.append(handle)
+        else:
+            await handle.dispose()
+    return found

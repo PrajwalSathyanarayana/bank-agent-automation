@@ -116,6 +116,53 @@ class RunLogger:
             {"artifact_id": artifact_id, "version": version, "sha256_hash": sha256_hash},
         )
 
+    def step_recorded(
+        self,
+        index: int,
+        action: str,
+        description: str,
+        safety_tier: str,
+        acted: bool,
+        input_value: Optional[str],
+        locators: list[dict],
+        weak: bool,
+        rejected: list[dict],
+        checkpoints: list[dict],
+        is_assertion: bool,
+        next_step_check_added_to: Optional[int],
+    ) -> None:
+        """Discovery: one line per recorded step, telling its whole story.
+
+        Weak locators ("weak": true) and assertions ("is_assertion": true) are one search
+        away. Locator values are the stored ones, already cleared of this run's data.
+        Rejections carry a kind and a reason, never a value. acted is false for the
+        irreversible step, recorded but never clicked.
+        """
+        self._emit(
+            "STEP_RECORDED",
+            {
+                "index": index,
+                "action": action,
+                "description": description,
+                "safety_tier": safety_tier,
+                "acted": acted,
+                "input_value": input_value,
+                "locators": locators,
+                "weak": weak,
+                "rejected": rejected,
+                "checkpoints": checkpoints,
+                "is_assertion": is_assertion,
+                "next_step_check_added_to": next_step_check_added_to,
+            },
+        )
+
+    def secret_on_page(self, step_index: int, secrets: list[str], found_in: str) -> None:
+        """Discovery warning: a secret's value appeared on the page. Names only, never values.
+
+        Its own event so a security issue never sits unnoticed inside a routine line.
+        """
+        self._emit("SECRET_ON_PAGE", {"step_index": step_index, "secrets": secrets, "found_in": found_in})
+
     def summary_metrics(
         self, duration_ms: int, step_count: int, retry_count: int, human_interventions: int
     ) -> None:

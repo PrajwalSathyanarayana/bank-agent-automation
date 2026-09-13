@@ -5,14 +5,25 @@ locators can be proven, and committed once the action has run.
 """
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlsplit
 
-from playwright.async_api import ElementHandle
+from playwright.async_api import ElementHandle, Page
 
-from src.discovery.locators import DerivedLocators
-from src.locating.checks import element_wording
+from src.config.settings import settings
+from src.discovery.locators import (
+    Candidate,
+    DerivedLocators,
+    RunValues,
+    derive_locators,
+    parameterize_address,
+    scan,
+)
+from src.discovery.perception import Box, ElementFacts, PageElement
+from src.locating.checks import element_wording, find_phrase
+from src.observability.logger import RunLogger
 from src.safety.classifier import classify
 from src.types.placeholders import find_placeholders
-from src.types.step_schema import ActionType, Step
+from src.types.step_schema import ActionType, CheckpointType, LocatorType, Step, StepCheckpoint
 
 START_DESCRIPTION = "Open the start page"
 
@@ -34,6 +45,41 @@ class RecordingError(RuntimeError):
     """Raised when the loop asks for a recording the artifact can't hold."""
 
 
+class AssertionRefused(RecordingError):
+    """The model's assertion can't be recorded; the message says why, worded for the model."""
+
+
+# The basic facts locators.py needs about an element found by its text rather than
+# picked from the numbered list.
+_ELEMENT_BASICS = """(element) => {
+  const box = element.getBoundingClientRect();
+  const role = (element.getAttribute("role") || "").trim().toLowerCase().split(/\\s+/)[0];
+  return {
+    tag: element.tagName.toLowerCase(),
+    input_type: element.tagName === "INPUT" ? element.type : "",
+    role: role,
+    box: { x: box.x, y: box.y, width: box.width, height: box.height },
+  };
+}"""
+
+
+@dataclass(frozen=True)
+class DraftedAssertion:
+    """A checking step, with the locator details the run log reports."""
+
+    step: Step
+    derived: DerivedLocators
+
+
+@dataclass(frozen=True)
+class Committed:
+    """A step as it entered the recording."""
+
+    step: Step
+    # Names of secrets found in the page address or title; those checks were left out.
+    secrets_found: list[str]
+
+
 @dataclass(frozen=True)
 class Action:
     """One of the model's actions, as the loop hands it to the recorder."""
@@ -49,9 +95,13 @@ class Action:
 
 
 class Recorder:
-    """Builds the artifact's steps in order: the start step first, then each action."""
+    """Builds the artifact's steps in order: the start step first, then each action.
 
-    def __init__(self) -> None:
+    Every committed step is written to the run log as it is recorded.
+    """
+
+    def __init__(self, logger: RunLogger) -> None:
+        self._logger = logger
         self._steps: list[Step] = []
 
     @property
@@ -94,12 +144,166 @@ class Recorder:
         )
         return _with_tier(step, current_url, wording=await element_wording(element))
 
+    async def draft_assertion(self, phrase: str, reason: str, page: Page, run: RunValues) -> DraftedAssertion:
+        """A checking step for the model's assert_visible: the one element showing the phrase.
+
+        The element is visible and shows the phrase as whole words, ignoring case, so the
+        assertion passes now by construction. It is refused (AssertionRefused, worded for
+        the model) when the phrase is empty, not shown, or shown by more than one element:
+        a checking step needs one element whose locators replay can find again.
+        """
+        if not phrase.strip():
+            raise AssertionRefused("the assertion needs the text you expect to see")
+        matches = await find_phrase(page, phrase)
+        try:
+            if not matches:
+                raise AssertionRefused(
+                    f'no visible element shows "{phrase}"; quote the text as it appears on the screen'
+                )
+            if len(matches) > 1:
+                raise AssertionRefused(
+                    f'"{phrase}" is shown by {len(matches)} elements; quote a longer phrase that appears once'
+                )
+            element = matches[0]
+            basics = await element.evaluate(_ELEMENT_BASICS)
+            facts = ElementFacts(
+                tag=basics["tag"], box=Box(**basics["box"]), input_type=basics["input_type"], role=basics["role"]
+            )
+            target = PageElement(number=0, facts=facts, description="", in_viewport=True, handle=element)
+            derived = await derive_locators(page, target, run)
+            step = await self.draft_step(
+                Action(ActionType.ASSERT_TEXT, reason, value=phrase), element, derived, page.url
+            )
+            return DraftedAssertion(step, derived)
+        finally:
+            for handle in matches:
+                await handle.dispose()
+
+    async def commit(
+        self,
+        step: Step,
+        page: Page,
+        run: RunValues,
+        *,
+        derived: Optional[DerivedLocators],
+        acted: bool = True,
+    ) -> Committed:
+        """Add a drafted step to the recording, with automatic checks of where the page landed.
+
+        derived is what locators.py found for the step's element (None only for the start
+        step, which has no element); it is required so the run log always gets the
+        locator kinds, rejections and weak flag.
+
+        After an action (or opening the start page) the step gets a page-path and a
+        page-title check, each cleared of this run's data or left out if it can't be.
+        The previous step gets a check that this step's element is present, so a failed
+        form submission is caught at the step that caused it; the last step never gets
+        one, since nothing follows it.
+
+        A checking step gets no path or title check: it doesn't move the page. acted=False
+        is for the irreversible step, recorded but never clicked: the page after it was
+        never seen, so there is nothing to check.
+        """
+        if step.sequence_index != len(self._steps):
+            raise RecordingError(
+                f"step {step.sequence_index} is out of order; the next step is {len(self._steps)}"
+            )
+        checkpoints: list[StepCheckpoint] = []
+        landing_secrets: list[str] = []
+        if acted and step.action != ActionType.ASSERT_TEXT:
+            checkpoints, landing_secrets = await _landing_checks(page, run)
+        step = step.model_copy(update={"checkpoints": [*step.checkpoints, *checkpoints]})
+
+        next_check_added_to = None
+        if self._steps:
+            previous = self._steps[-1]
+            self._steps[-1] = _with_next_step_check(previous)
+            if self._steps[-1] is not previous:
+                next_check_added_to = previous.sequence_index
+        self._steps.append(step)
+
+        self._log_step(step, derived, acted, next_check_added_to)
+        locator_secrets = derived.secrets_found if derived is not None else []
+        if locator_secrets:
+            self._logger.secret_on_page(step.sequence_index, locator_secrets, "locator candidates")
+        if landing_secrets:
+            self._logger.secret_on_page(step.sequence_index, landing_secrets, "page address or title")
+        return Committed(step, sorted({*locator_secrets, *landing_secrets}))
+
+    def _log_step(
+        self, step: Step, derived: Optional[DerivedLocators], acted: bool, next_check_added_to: Optional[int]
+    ) -> None:
+        kinds = derived.kinds if derived is not None else [None] * len(step.locators)
+        self._logger.step_recorded(
+            index=step.sequence_index,
+            action=step.action.value,
+            description=step.description,
+            safety_tier=step.safety_tier.value,
+            acted=acted,
+            input_value=step.input_value,
+            locators=[
+                {"priority": locator.priority, "kind": kind, "type": locator.type.value, "value": locator.value}
+                for locator, kind in zip(step.locators, kinds)
+            ],
+            weak=derived.weak if derived is not None else False,
+            rejected=[
+                {"kind": rejection.kind, "reason": rejection.reason}
+                for rejection in (derived.rejected if derived is not None else [])
+            ],
+            checkpoints=[
+                {"type": checkpoint.type.value, "expected_value": checkpoint.expected_value}
+                for checkpoint in step.checkpoints
+            ],
+            is_assertion=step.action == ActionType.ASSERT_TEXT,
+            next_step_check_added_to=next_check_added_to,
+        )
+
 
 def _with_tier(step: Step, current_url: str, wording: list[str]) -> Step:
     # The element's own wording decides first; the description and locators can only
     # raise the tier further.
     tier = classify(step, current_url, element_wording=wording)
     return step.model_copy(update={"safety_tier": tier})
+
+
+async def _landing_checks(page: Page, run: RunValues) -> tuple[list[StepCheckpoint], list[str]]:
+    """Page-path and page-title checks for where an action landed, cleared of run data.
+
+    The path keeps no host (each bank has its own) and no query or fragment; a segment
+    equal to a text input becomes a placeholder (/member/{member_id}/accounts). Anything
+    else carrying this run's data leaves that check out, with the same scan as locators.
+    """
+    checkpoints: list[StepCheckpoint] = []
+    secrets_found: list[str] = []
+
+    path = urlsplit(page.url).path or "/"
+    outcome = scan(Candidate("address", LocatorType.CSS, "", address=path), run)
+    stored_path = parameterize_address(path, run.text_inputs) if outcome.stored_value is not None else None
+    if stored_path is not None:
+        checkpoints.append(_checkpoint(CheckpointType.PAGE_PATH, stored_path))
+    elif outcome.secret:
+        secrets_found.append(outcome.secret)
+
+    title = (await page.title()).strip()
+    if title:
+        outcome = scan(Candidate("text", LocatorType.TEXT_CONTENT, title, data=(title,)), run)
+        if outcome.stored_value is not None:
+            checkpoints.append(_checkpoint(CheckpointType.PAGE_TITLE, outcome.stored_value))
+        elif outcome.secret:
+            secrets_found.append(outcome.secret)
+    return checkpoints, secrets_found
+
+
+def _with_next_step_check(step: Step) -> Step:
+    # Answered at replay with the next step's own locators and fallbacks.
+    if any(checkpoint.type == CheckpointType.NEXT_STEP_TARGET for checkpoint in step.checkpoints):
+        return step
+    check = StepCheckpoint(type=CheckpointType.NEXT_STEP_TARGET, timeout_ms=settings.replay_checkpoint_timeout_ms)
+    return step.model_copy(update={"checkpoints": [*step.checkpoints, check]})
+
+
+def _checkpoint(kind: CheckpointType, expected_value: str) -> StepCheckpoint:
+    return StepCheckpoint(type=kind, expected_value=expected_value, timeout_ms=settings.replay_checkpoint_timeout_ms)
 
 
 def _description(action: Action) -> str:

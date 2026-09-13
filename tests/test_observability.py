@@ -118,6 +118,56 @@ def test_first_line_contains_no_secret_values(tmp_path, monkeypatch):
         assert secret.get_secret_value() not in raw
 
 
+def _record_a_step(logger, **overrides):
+    fields = dict(
+        index=1,
+        action="type",
+        description="Enter the username",
+        safety_tier="SAFE",
+        acted=True,
+        input_value="{credential:bank_username}",
+        locators=[{"priority": 0, "kind": "name", "type": "css", "value": 'input[name="username"]'}],
+        weak=False,
+        rejected=[{"kind": "text", "reason": "matches more than one element"}],
+        checkpoints=[{"type": "page_path", "expected_value": "/login"}],
+        is_assertion=False,
+        next_step_check_added_to=0,
+    )
+    fields.update(overrides)
+    logger.step_recorded(**fields)
+    return fields
+
+
+def test_step_recorded_is_one_line_with_the_whole_step(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    fields = _record_a_step(logger)
+    lines = _read_lines(logger.log_path)
+    assert len(lines) == 1
+    assert lines[0]["event_type"] == "STEP_RECORDED"
+    for name, value in fields.items():
+        assert lines[0][name] == value
+
+
+def test_step_recorded_still_scrubs_a_secret_that_slips_into_it(tmp_path, monkeypatch):
+    # Every event goes through the chokepoint; a password in a description is scrubbed.
+    logger = _make_logger(tmp_path, monkeypatch)
+    password = env.mock_bank_password.get_secret_value()
+    _record_a_step(logger, description=f"Typed {password} into the box")
+    raw = logger.log_path.read_text(encoding="utf-8")
+    assert password not in raw
+    assert "[REDACTED]" in raw
+
+
+def test_secret_on_page_names_the_secret_and_where_it_was_found(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    logger.secret_on_page(step_index=3, secrets=["bank_password"], found_in="locator candidates")
+    line = _read_lines(logger.log_path)[0]
+    assert line["event_type"] == "SECRET_ON_PAGE"
+    assert line["secrets"] == ["bank_password"]
+    assert line["step_index"] == 3
+    assert line["found_in"] == "locator candidates"
+
+
 def test_recovery_event_handles_optional_fields(tmp_path, monkeypatch):
     logger = _make_logger(tmp_path, monkeypatch)
     logger.recovery_event(tier="TIER_1_RULE")
