@@ -6,6 +6,7 @@ from io import BytesIO
 
 import pytest
 from PIL import Image, ImageFont
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import expect
 
 from src.config.env import env
@@ -22,6 +23,7 @@ from src.discovery.perception import (
     Box,
     ElementFacts,
     Observation,
+    ObservationReleased,
     PageElement,
     UnknownElement,
     _element_indexes,
@@ -33,6 +35,7 @@ from src.discovery.perception import (
     mark,
     mark_colour,
     observe,
+    observing,
 )
 from src.safety.allowlist import check_domain
 
@@ -857,3 +860,58 @@ async def test_both_bill_pay_links_are_outlined_in_their_own_colours(page, dashb
     for element in bill_pay:
         assert _bottom_edge_pixel(image, element.facts.box) == mark_colour(element.number)
     assert mark_colour(bill_pay[0].number) != mark_colour(bill_pay[1].number)
+
+
+# --- perception: releasing element references ---
+
+class _TurnFailed(Exception):
+    pass
+
+
+@pytest.mark.anyio
+async def test_observation_is_released_when_the_block_ends(page):
+    await page.goto("/login")
+    async with observing(page) as observation:
+        assert observation.element(1).number == 1
+    with pytest.raises(ObservationReleased, match="replaced; use the latest one"):
+        observation.element(1)
+
+
+@pytest.mark.anyio
+async def test_observation_is_released_even_when_the_turn_fails(page):
+    await page.goto("/login")
+    with pytest.raises(_TurnFailed):  # the turn's own error comes out unchanged
+        async with observing(page) as observation:
+            raise _TurnFailed()
+    with pytest.raises(ObservationReleased):
+        observation.element(1)
+
+
+@pytest.mark.anyio
+async def test_released_references_are_let_go_in_the_browser(page):
+    # Not just a flag: the browser-side reference is gone, so acting on it fails.
+    await page.goto("/login")
+    async with observing(page) as observation:
+        username_box = observation.element(2).handle
+    with pytest.raises(PlaywrightError):
+        await username_box.fill("x", timeout=2000)
+
+
+@pytest.mark.anyio
+async def test_releasing_twice_is_harmless(page):
+    await page.goto("/login")
+    observation = await observe(page)
+    await observation.release()
+    await observation.release()
+
+
+@pytest.mark.anyio
+async def test_releasing_after_the_page_has_moved_on_is_harmless(page):
+    # Pins Playwright's behaviour: releasing raises nothing once the page has changed,
+    # so a release at the end of a turn that navigated can never hide an error.
+    await page.goto("/login")
+    observation = await observe(page)
+    await page.goto("/")
+    await observation.release()
+    with pytest.raises(ObservationReleased):
+        observation.element(1)

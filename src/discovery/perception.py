@@ -1,10 +1,11 @@
 """What the discovery model sees each step: a screenshot plus a numbered list of elements."""
 import json
 import math
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import AsyncIterator, Iterable, Optional, Sequence
 
 from PIL import Image, ImageDraw, ImageFont
 from playwright.async_api import ElementHandle, JSHandle, Page
@@ -69,6 +70,14 @@ class UnknownElement(LookupError):
     """Raised when the model names a number that isn't in the current list."""
 
 
+class ObservationReleased(RuntimeError):
+    """Raised when an element is asked for after its observation was released.
+
+    Without this, acting on a released handle fails with Playwright's "Target page,
+    context or browser has been closed", which reads like a browser crash.
+    """
+
+
 @dataclass(frozen=True)
 class Box:
     x: float
@@ -119,8 +128,11 @@ class Observation:
     omitted_count: int = 0
     # The copy with numbered boxes drawn on it, which the model receives; None until drawn.
     marked_screenshot: Optional[bytes] = None
+    _released: bool = field(default=False, init=False, repr=False)
 
     def element(self, number: int) -> PageElement:
+        if self._released:
+            raise ObservationReleased("this element list has been replaced; use the latest one")
         for element in self.elements:
             if element.number == number:
                 return element
@@ -140,6 +152,19 @@ class Observation:
         if self.omitted_count:
             lines.append(f"+{self.omitted_count} more elements not listed")
         return "\n".join(lines)
+
+    async def release(self) -> None:
+        """Let go of every element reference; element() refuses from then on.
+
+        Safe to call twice, and after the page has changed or closed: Playwright's
+        dispose raises in none of those cases (checked), so a release at the end of a
+        failed turn cannot hide the error that ended it.
+        """
+        if self._released:
+            return
+        self._released = True
+        for element in self.elements:
+            await element.handle.dispose()
 
 
 def element_kind(facts: ElementFacts) -> str:
@@ -330,6 +355,17 @@ async def observe(page: Page, max_elements: Optional[int] = None) -> Observation
         omitted_count=omitted,
         marked_screenshot=mark(screenshot, elements),
     )
+
+
+@asynccontextmanager
+async def observing(page: Page, max_elements: Optional[int] = None) -> AsyncIterator[Observation]:
+    """observe() for one turn: every element reference is released when the block ends,
+    even when the turn ends in an error, so a skipped cleanup cannot happen."""
+    observation = await observe(page, max_elements)
+    try:
+        yield observation
+    finally:
+        await observation.release()
 
 
 def _to_facts(raw: dict) -> ElementFacts:
