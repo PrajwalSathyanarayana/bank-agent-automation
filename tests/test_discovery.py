@@ -25,8 +25,10 @@ from src.discovery.locators import (
     prove,
     scan,
 )
+from src.locating.checks import element_wording
 from src.locating.resolver import resolve
-from src.types.step_schema import Locator, LocatorType
+from src.safety.classifier import classify
+from src.types.step_schema import ActionType, Locator, LocatorType, SafetyTier, Step
 from src.discovery.perception import (
     _COLLECTOR_SOURCE,
     _TAG_FONT,
@@ -1263,3 +1265,28 @@ async def test_same_page_derives_the_same_locators_twice(page):
     assert await derive_locators(page, username_box, _bank_run()) == await derive_locators(
         page, username_box, _bank_run()
     )
+
+
+# --- safety tier on the real confirm page (regression) ---
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "description, tier",
+    [pytest.param('button "Confirm Payment"', SafetyTier.IRREVERSIBLE, id="confirm payment"),
+     pytest.param('link "Cancel"', SafetyTier.SAFE, id="cancel")],
+)
+async def test_confirm_payment_is_irreversible_whatever_the_model_calls_it(page, dashboard_popup, description, tier):
+    # The page repeats "Confirm Payment" in its panel title, so the button's text locator
+    # is rejected; with a neutral reason, only the button's own wording names it.
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/10234")
+    await page.goto("/billpay")
+    await page.click("input[type='submit']")
+    await page.wait_for_url("**/billpay/confirm")
+    observation = await observe(page)
+    element = next(element for element in observation.elements if element.description == description)
+    derived = await derive_locators(page, element, _bank_run())
+    step = Step(sequence_index=1, action=ActionType.CLICK, description="Submit it", locators=derived.locators)
+    wording = await element_wording(element.handle)
+    assert classify(step, page.url, element_wording=wording) == tier

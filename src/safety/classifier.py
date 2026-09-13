@@ -1,4 +1,5 @@
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -28,17 +29,24 @@ RULES: list[ClassificationRule] = [
 ]
 
 
-def _step_text_signals(step: Step) -> list[str]:
-    signals = [step.description]
-    for locator in step.locators:
-        if locator.type.value == "text_content":
-            signals.append(locator.value)
-    return [s.lower() for s in signals]
+def _step_text_signals(step: Step, element_wording: Sequence[str]) -> list[str]:
+    # Every signal can only raise the tier, never lower it. The element's own wording
+    # comes first: safety follows what the element is, not which locators survived or
+    # how the model described it. Locator values of every type count, so a button's
+    # [value="Confirm Payment"] selector is a signal too.
+    signals = [*element_wording, step.description, *(locator.value for locator in step.locators)]
+    return [signal.lower() for signal in signals if signal]
 
 
-def classify(step: Step, current_url: str) -> SafetyTier:
+def classify(step: Step, current_url: str, *, element_wording: Sequence[str]) -> SafetyTier:
+    """The step's safety tier on the page it acts on.
+
+    element_wording is what the target element itself says (its text, a button's value,
+    aria-label, title, alt), read from the live page; empty for a step with no element.
+    It is required so no caller can quietly leave out the strongest signal.
+    """
     path = urlparse(current_url).path
-    text_signals = _step_text_signals(step)
+    text_signals = _step_text_signals(step, element_wording)
 
     for rule in RULES:
         if not re.match(rule.url_pattern, path):
@@ -51,11 +59,12 @@ def classify(step: Step, current_url: str) -> SafetyTier:
     return SafetyTier.SAFE
 
 
-def verify_tier(step: Step, current_url: str) -> SafetyTier:
-    """Re-classify at replay time. Raises SafetyEscalation if the fresh
-    classification outranks the artifact's declared safety_tier.
+def verify_tier(step: Step, current_url: str, *, element_wording: Sequence[str]) -> SafetyTier:
+    """Re-classify at replay time, with the wording of the element replay actually found.
+    Raises SafetyEscalation if the fresh classification outranks the artifact's declared
+    safety_tier.
     """
-    recomputed = classify(step, current_url)
+    recomputed = classify(step, current_url, element_wording=element_wording)
     declared = step.safety_tier
     if TIER_RANK[recomputed] > TIER_RANK[declared]:
         raise SafetyEscalation(

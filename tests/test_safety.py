@@ -108,43 +108,73 @@ def _step(description: str, locator_text: str | None = None, safety_tier: Safety
 
 def test_classify_read_only_step_is_safe():
     step = _step("Read member detail")
-    assert classify(step, "/member/ANY-ID") == SafetyTier.SAFE
+    assert classify(step, "/member/ANY-ID", element_wording=[]) == SafetyTier.SAFE
 
 
 def test_classify_member_edit_is_risky():
     step = _step("Submit profile update")
-    assert classify(step, "/member/ANY-ID/edit") == SafetyTier.RISKY
+    assert classify(step, "/member/ANY-ID/edit", element_wording=[]) == SafetyTier.RISKY
 
 
 def test_classify_billpay_form_submission_is_risky():
     step = _step("Submit payment form")
-    assert classify(step, "/billpay") == SafetyTier.RISKY
+    assert classify(step, "/billpay", element_wording=[]) == SafetyTier.RISKY
 
 
 def test_classify_confirm_payment_click_is_irreversible():
     step = _step("Click confirm payment button", locator_text="Confirm Payment")
-    assert classify(step, "/billpay/confirm") == SafetyTier.IRREVERSIBLE
+    assert classify(step, "/billpay/confirm", element_wording=[]) == SafetyTier.IRREVERSIBLE
 
 
 def test_classify_cancel_click_on_confirm_page_is_not_irreversible():
     step = _step("Click cancel link", locator_text="Cancel")
-    assert classify(step, "/billpay/confirm") == SafetyTier.SAFE
+    assert classify(step, "/billpay/confirm", element_wording=["Cancel"]) == SafetyTier.SAFE
+
+
+def test_classify_requires_the_elements_own_wording():
+    # Keyword-only and required: no caller can quietly leave out the strongest signal.
+    with pytest.raises(TypeError):
+        classify(_step("Read member detail"), "/member/ANY-ID")
+
+
+def test_element_wording_alone_makes_confirm_payment_irreversible():
+    # Regression: the page repeats "Confirm Payment", so the text locator was rejected,
+    # and the model's reason doesn't name the button. Its own value must still decide.
+    step = _step("Submit it")
+    assert classify(step, "/billpay/confirm", element_wording=["Confirm Payment"]) == SafetyTier.IRREVERSIBLE
+
+
+def test_any_locator_value_is_a_signal_not_only_text_locators():
+    step = Step(
+        sequence_index=0,
+        action=ActionType.CLICK,
+        description="Submit it",
+        locators=[Locator(type=LocatorType.CSS, priority=0,
+                          value='form.actions input[type="submit"][value="Confirm Payment"]')],
+    )
+    assert classify(step, "/billpay/confirm", element_wording=[]) == SafetyTier.IRREVERSIBLE
 
 
 def test_verify_tier_raises_when_artifact_underdeclares_risk():
     step = _step("Click confirm payment button", locator_text="Confirm Payment", safety_tier=SafetyTier.SAFE)
     with pytest.raises(SafetyEscalation):
-        verify_tier(step, "/billpay/confirm")
+        verify_tier(step, "/billpay/confirm", element_wording=[])
+
+
+def test_verify_tier_reads_the_found_elements_wording_too():
+    step = _step("Submit it", safety_tier=SafetyTier.SAFE)
+    with pytest.raises(SafetyEscalation):
+        verify_tier(step, "/billpay/confirm", element_wording=["Confirm Payment"])
 
 
 def test_verify_tier_passes_when_declared_tier_matches():
     step = _step("Click confirm payment button", locator_text="Confirm Payment", safety_tier=SafetyTier.IRREVERSIBLE)
-    assert verify_tier(step, "/billpay/confirm") == SafetyTier.IRREVERSIBLE
+    assert verify_tier(step, "/billpay/confirm", element_wording=[]) == SafetyTier.IRREVERSIBLE
 
 
 def test_verify_tier_passes_when_declared_tier_is_overcautious():
     step = _step("Read member detail", safety_tier=SafetyTier.RISKY)
-    assert verify_tier(step, "/member/ANY-ID") == SafetyTier.SAFE
+    assert verify_tier(step, "/member/ANY-ID", element_wording=[]) == SafetyTier.SAFE
 
 
 # --- redactor.py ---

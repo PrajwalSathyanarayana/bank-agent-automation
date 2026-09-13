@@ -1,6 +1,7 @@
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
+from src.locating.checks import element_wording
 from src.locating.resolver import UnfillableLocator, css_string, fill, resolve
 from src.types.step_schema import Locator, LocatorType
 
@@ -120,3 +121,22 @@ async def test_an_injection_shaped_value_matches_nothing(page):
 )
 def test_css_string_escaping(value, escaped):
     assert css_string(value) == escaped
+
+
+# --- what an element says, for the safety classifier ---
+
+@pytest.mark.anyio
+async def test_element_wording_reads_text_button_value_and_labels(page):
+    await _set_page(page, '<input id="b" type="submit" value="Confirm Payment" title="Pay now">'
+                          '<a id="l" href="#" aria-label="Close dialog">x</a>')
+    assert await element_wording(await page.query_selector("#b")) == ["Confirm Payment", "Pay now"]
+    assert await element_wording(await page.query_selector("#l")) == ["x", "Close dialog"]
+
+
+@pytest.mark.anyio
+async def test_element_wording_never_reads_a_password_or_typed_value(page):
+    await _set_page(page, '<input id="p" type="password"><input id="t" type="text">')
+    await page.fill("#p", "Zq9-not-the-real-password")
+    await page.fill("#t", "10234")
+    assert await element_wording(await page.query_selector("#p")) == []
+    assert await element_wording(await page.query_selector("#t")) == []
