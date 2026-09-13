@@ -168,6 +168,16 @@ class Artifact(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_last_step_has_no_next_step_check(self) -> "Artifact":
+        last = self.steps[-1]
+        if any(c.type == CheckpointType.NEXT_STEP_TARGET for c in last.checkpoints):
+            raise ValueError(
+                f"step {last.sequence_index} is the last step; "
+                "a next_step_target checkpoint has no next step to check"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_placeholders(self) -> "Artifact":
         inputs = {p.key for p in self.input_parameters}
         credentials = {c.key for c in self.credentials}
@@ -189,7 +199,8 @@ class Artifact(BaseModel):
             for locator in step.locators:
                 check(locator.value, f"{where} locator", address=True)
             for checkpoint in step.checkpoints:
-                check(checkpoint.target_locator.value, f"{where} checkpoint locator", address=True)
+                if checkpoint.target_locator:
+                    check(checkpoint.target_locator.value, f"{where} checkpoint locator", address=True)
                 check(
                     checkpoint.expected_value,
                     f"{where} checkpoint",

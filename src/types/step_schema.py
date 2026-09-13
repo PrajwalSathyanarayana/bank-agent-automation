@@ -44,6 +44,22 @@ class CheckpointType(str, Enum):
     TEXT_MATCH = "text_match"
     URL_CONTAINS = "url_contains"
     VALUE_EQUALS = "value_equals"
+    PAGE_TITLE = "page_title"
+    # Answered at replay with the next step's own locators, so none are stored here.
+    NEXT_STEP_TARGET = "next_step_target"
+
+
+_NEEDS_LOCATOR = {
+    CheckpointType.ELEMENT_VISIBLE,
+    CheckpointType.TEXT_MATCH,
+    CheckpointType.VALUE_EQUALS,
+}
+_NEEDS_EXPECTED_VALUE = {
+    CheckpointType.TEXT_MATCH,
+    CheckpointType.VALUE_EQUALS,
+    CheckpointType.URL_CONTAINS,
+    CheckpointType.PAGE_TITLE,
+}
 
 
 class StepCheckpoint(BaseModel):
@@ -51,9 +67,27 @@ class StepCheckpoint(BaseModel):
         default_factory=lambda: str(uuid.uuid4())
     )
     type: CheckpointType
-    target_locator: Locator
-    expected_value: Optional[str] = None
-    timeout_ms: int = Field(default=5000, gt=0)
+    target_locator: Optional[Locator] = None
+    expected_value: Optional[str] = Field(default=None, min_length=1)
+    timeout_ms: int = Field(
+        gt=0,
+        description="No default: the recorder fills it from settings, the single source for the number",
+    )
+
+    @model_validator(mode="after")
+    def validate_fields_for_type(self) -> "StepCheckpoint":
+        needs_locator = self.type in _NEEDS_LOCATOR
+        if needs_locator and self.target_locator is None:
+            raise ValueError(f"{self.type.value} checkpoint requires target_locator")
+        if not needs_locator and self.target_locator is not None:
+            raise ValueError(f"{self.type.value} checkpoint must not have target_locator")
+
+        needs_value = self.type in _NEEDS_EXPECTED_VALUE
+        if needs_value and self.expected_value is None:
+            raise ValueError(f"{self.type.value} checkpoint requires expected_value")
+        if not needs_value and self.expected_value is not None:
+            raise ValueError(f"{self.type.value} checkpoint must not have expected_value")
+        return self
 
 
 class RetryBudget(BaseModel):

@@ -37,6 +37,15 @@ def _valid_locator() -> Locator:
     return Locator(type=LocatorType.CSS, value="#member-id", priority=0)
 
 
+def _checkpoint(type: CheckpointType, target_locator=None, expected_value=None) -> StepCheckpoint:
+    return StepCheckpoint(
+        type=type,
+        target_locator=target_locator,
+        expected_value=expected_value,
+        timeout_ms=10_000,
+    )
+
+
 def _valid_step(sequence_index: int = 0) -> Step:
     return Step(
         sequence_index=sequence_index,
@@ -88,12 +97,110 @@ def test_step_rejects_negative_sequence_index():
         )
 
 
-def test_step_checkpoint_requires_target_locator():
-    checkpoint = StepCheckpoint(
-        type=CheckpointType.ELEMENT_VISIBLE,
-        target_locator=_valid_locator(),
+def test_element_checkpoint_constructs():
+    checkpoint = _checkpoint(CheckpointType.ELEMENT_VISIBLE, target_locator=_valid_locator())
+    assert checkpoint.timeout_ms == 10_000
+
+
+def test_checkpoint_requires_timeout_ms():
+    # No schema default: the recorder fills it from settings.
+    with pytest.raises(ValidationError) as exc_info:
+        StepCheckpoint(type=CheckpointType.ELEMENT_VISIBLE, target_locator=_valid_locator())
+    assert [e["loc"] for e in exc_info.value.errors()] == [("timeout_ms",)]
+
+
+def test_page_title_checkpoint_constructs_without_locator():
+    checkpoint = _checkpoint(CheckpointType.PAGE_TITLE, expected_value="Bill Payment")
+    assert checkpoint.target_locator is None
+
+
+def test_next_step_target_checkpoint_stores_no_locator_or_value():
+    checkpoint = _checkpoint(CheckpointType.NEXT_STEP_TARGET)
+    assert checkpoint.target_locator is None
+    assert checkpoint.expected_value is None
+
+
+@pytest.mark.parametrize(
+    "checkpoint_type, expected_value",
+    [
+        (CheckpointType.ELEMENT_VISIBLE, None),
+        (CheckpointType.TEXT_MATCH, "Member Detail"),
+        (CheckpointType.VALUE_EQUALS, "50.00"),
+    ],
+)
+def test_element_checkpoint_without_locator_rejected(checkpoint_type, expected_value):
+    with pytest.raises(ValidationError, match="requires target_locator"):
+        _checkpoint(checkpoint_type, expected_value=expected_value)
+
+
+@pytest.mark.parametrize(
+    "checkpoint_type, expected_value",
+    [
+        (CheckpointType.URL_CONTAINS, "/billpay"),
+        (CheckpointType.PAGE_TITLE, "Bill Payment"),
+        (CheckpointType.NEXT_STEP_TARGET, None),
+    ],
+)
+def test_address_title_or_next_step_checkpoint_with_locator_rejected(checkpoint_type, expected_value):
+    with pytest.raises(ValidationError, match="must not have target_locator"):
+        _checkpoint(checkpoint_type, target_locator=_valid_locator(), expected_value=expected_value)
+
+
+@pytest.mark.parametrize(
+    "checkpoint_type, target_locator",
+    [
+        (CheckpointType.TEXT_MATCH, _valid_locator()),
+        (CheckpointType.VALUE_EQUALS, _valid_locator()),
+        (CheckpointType.URL_CONTAINS, None),
+        (CheckpointType.PAGE_TITLE, None),
+    ],
+)
+def test_comparison_checkpoint_without_expected_value_rejected(checkpoint_type, target_locator):
+    with pytest.raises(ValidationError, match="requires expected_value"):
+        _checkpoint(checkpoint_type, target_locator=target_locator)
+
+
+@pytest.mark.parametrize(
+    "checkpoint_type, target_locator",
+    [
+        (CheckpointType.ELEMENT_VISIBLE, _valid_locator()),
+        (CheckpointType.NEXT_STEP_TARGET, None),
+    ],
+)
+def test_presence_checkpoint_with_expected_value_rejected(checkpoint_type, target_locator):
+    with pytest.raises(ValidationError, match="must not have expected_value"):
+        _checkpoint(checkpoint_type, target_locator=target_locator, expected_value="anything")
+
+
+def test_checkpoint_rejects_empty_expected_value():
+    with pytest.raises(ValidationError):
+        _checkpoint(CheckpointType.URL_CONTAINS, expected_value="")
+
+
+def _step_checking_next_target(sequence_index: int) -> Step:
+    return Step(
+        sequence_index=sequence_index,
+        action=ActionType.CLICK,
+        description="Click the search button",
+        locators=[_valid_locator()],
+        checkpoints=[_checkpoint(CheckpointType.NEXT_STEP_TARGET)],
     )
-    assert checkpoint.timeout_ms == 5000
+
+
+def test_next_step_target_on_a_middle_step_accepted():
+    artifact = Artifact(
+        metadata=_valid_metadata(),
+        steps=[_step_checking_next_target(0), _valid_step(1)],
+    )
+    assert artifact.steps[0].checkpoints[0].type == CheckpointType.NEXT_STEP_TARGET
+
+
+def test_next_step_target_on_the_last_step_rejected():
+    with pytest.raises(ValidationError, match="no next step"):
+        Artifact(
+            metadata=_valid_metadata(),
+            steps=[_valid_step(0), _step_checking_next_target(1)],
+        )
 
 
 # --- Artifact schema ---
@@ -482,8 +589,8 @@ def test_credential_in_description_rejected():
 
 
 def test_credential_in_checkpoint_rejected():
-    checkpoint = StepCheckpoint(
-        type=CheckpointType.VALUE_EQUALS,
+    checkpoint = _checkpoint(
+        CheckpointType.VALUE_EQUALS,
         target_locator=_valid_locator(),
         expected_value="{credential:bank_password}",
     )
@@ -525,18 +632,16 @@ def test_placeholder_inside_a_segment_or_text_locator_rejected(locator_value):
 
 
 def test_url_check_placeholder_must_be_a_whole_segment():
-    whole = StepCheckpoint(type=CheckpointType.URL_CONTAINS, target_locator=_valid_locator(),
-                           expected_value="/member/{member_id}/accounts")
-    partial = StepCheckpoint(type=CheckpointType.URL_CONTAINS, target_locator=_valid_locator(),
-                             expected_value="/member-{member_id}")
+    whole = _checkpoint(CheckpointType.URL_CONTAINS, expected_value="/member/{member_id}/accounts")
+    partial = _checkpoint(CheckpointType.URL_CONTAINS, expected_value="/member-{member_id}")
     _artifact_with(_step_with(checkpoints=[whole]))
     with pytest.raises(ValidationError, match="whole address segment"):
         _artifact_with(_step_with(checkpoints=[partial]))
 
 
 def test_text_check_may_use_an_input_anywhere():
-    checkpoint = StepCheckpoint(type=CheckpointType.TEXT_MATCH, target_locator=_valid_locator(),
-                                expected_value="Member #{member_id}")
+    checkpoint = _checkpoint(CheckpointType.TEXT_MATCH, target_locator=_valid_locator(),
+                             expected_value="Member #{member_id}")
     artifact = _artifact_with(_step_with(checkpoints=[checkpoint]))
     assert artifact.steps[0].checkpoints[0].expected_value == "Member #{member_id}"
 
