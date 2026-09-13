@@ -72,10 +72,9 @@ class ArtifactMetadata(BaseModel):
     version: str = Field(
         description="SemVer format e.g. 1.0.0"
     )
-    integrity_hash: str = Field(
-        min_length=64,
-        max_length=64,
-        description="SHA-256 hash of the step sequence"
+    integrity_hash: Optional[str] = Field(
+        default=None,
+        description="Keyed HMAC-SHA256 of the artifact's content; None until signed"
     )
     author: str = "DiscoveryEngine"
     target_url: str = Field(
@@ -100,10 +99,10 @@ class ArtifactMetadata(BaseModel):
 
     @field_validator("integrity_hash")
     @classmethod
-    def validate_hex(cls, v: str) -> str:
-        if not re.match(r"^[a-f0-9]{64}$", v):
+    def validate_hex(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not re.fullmatch(r"[a-f0-9]{64}", v):
             raise ValueError(
-                "integrity_hash must be a valid SHA-256 hex string"
+                "integrity_hash must be 64 lowercase hex characters"
             )
         return v
 

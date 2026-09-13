@@ -1,6 +1,9 @@
+import json
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import pytest
+from pydantic import SecretStr
 
 from src.config.env import env
 from src.safety.allowlist import (
@@ -12,7 +15,22 @@ from src.safety.allowlist import (
     enforce_safety,
 )
 from src.safety.classifier import SafetyEscalation, classify, verify_tier
+from src.safety.integrity import (
+    IntegrityCheckFailed,
+    canonical_bytes,
+    compute_signature,
+    sign,
+    verify,
+)
 from src.safety.redactor import REDACTED, redact_dict, redact_text, scrub_known_values
+from src.types.artifact_schema import (
+    Artifact,
+    ArtifactMetadata,
+    CredentialDefinition,
+    CredentialKind,
+    InputParamDefinition,
+    ParamType,
+)
 from src.types.step_schema import ActionType, Locator, LocatorType, SafetyTier, Step
 
 MOCK_BANK_HOSTNAME = urlparse(env.mock_bank_base_url).hostname
@@ -227,3 +245,137 @@ def test_scrub_replaces_longer_secret_first():
     result = scrub_known_values("value=abcdef", ["abc", "abcdef"])
     assert result == f"value={REDACTED}"
     assert "def" not in result
+
+
+# --- integrity fingerprint (keyed HMAC-SHA256) ---
+
+TEST_KEY = SecretStr("test-signing-key-0123456789-abcdef")
+OTHER_KEY = SecretStr("other-signing-key-0123456789-abcdef")
+
+
+def _unsigned_artifact() -> Artifact:
+    now = datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)
+    return Artifact(
+        metadata=ArtifactMetadata(
+            capability="member_servicing_and_bill_pay",
+            description="For member {member_id}, pay {amount} to {payee_name}.",
+            version="1.0.0",
+            target_url="http://localhost:5000/",
+            created_timestamp=now,
+            last_updated_timestamp=now,
+        ),
+        input_parameters=[
+            InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID"),
+            InputParamDefinition(key="amount", type=ParamType.NUMBER, description="Amount"),
+            InputParamDefinition(key="payee_name", type=ParamType.STRING, description="Payee"),
+        ],
+        credentials=[
+            CredentialDefinition(key="bank_password", kind=CredentialKind.SECRET, description="Password")
+        ],
+        steps=[
+            Step(
+                sequence_index=0,
+                action=ActionType.TYPE,
+                description="Type the password",
+                locators=[Locator(type=LocatorType.CSS, value="input[name='password']", priority=0)],
+                input_value="{credential:bank_password}",
+            )
+        ],
+    )
+
+
+def _signed_artifact() -> Artifact:
+    return sign(_unsigned_artifact(), TEST_KEY)
+
+
+def _hand_edited(artifact: Artifact, edit) -> Artifact:
+    # Mirrors a real hand edit: change the saved JSON, then load it again.
+    data = artifact.model_dump(mode="json")
+    edit(data)
+    return Artifact.model_validate(data)
+
+
+def test_signed_artifact_verifies():
+    verify(_signed_artifact(), TEST_KEY)  # should not raise
+
+
+def test_signing_does_not_change_the_original():
+    unsigned = _unsigned_artifact()
+    sign(unsigned, TEST_KEY)
+    assert unsigned.metadata.integrity_hash is None
+
+
+def test_same_artifact_always_gets_the_same_signature():
+    # One artifact signed twice; building two would give each its own random IDs.
+    unsigned = _unsigned_artifact()
+    assert sign(unsigned, TEST_KEY).metadata.integrity_hash == sign(unsigned, TEST_KEY).metadata.integrity_hash
+
+
+def test_signature_survives_saving_and_loading_as_json():
+    loaded = Artifact.model_validate_json(_signed_artifact().model_dump_json(indent=2))
+    verify(loaded, TEST_KEY)  # should not raise
+
+
+def test_unsigned_artifact_fails_verification():
+    with pytest.raises(IntegrityCheckFailed, match="unsigned"):
+        verify(_unsigned_artifact(), TEST_KEY)
+
+
+def test_wrong_key_fails_verification():
+    with pytest.raises(IntegrityCheckFailed, match="does not match"):
+        verify(_signed_artifact(), OTHER_KEY)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda d: d["metadata"].update(description="Pay {amount} to {payee_name}."),
+        lambda d: d["metadata"].update(capability="another_capability"),
+        lambda d: d["metadata"].update(version="1.0.1"),
+        lambda d: d["metadata"].update(target_url="http://localhost:5000/login"),
+        lambda d: d["metadata"].update(tenant_override_url="http://localhost:5000/other"),
+        lambda d: d["metadata"].update(artifact_id="00000000-0000-4000-8000-000000000000"),
+        lambda d: d["metadata"].update(author="Someone"),
+        lambda d: d["input_parameters"][1].update(type="string"),
+        lambda d: d["credentials"][0].update(kind="config"),
+        lambda d: d["steps"][0]["locators"][0].update(value="input[name='username']"),
+        lambda d: d["steps"][0].update(safety_tier="IRREVERSIBLE"),
+        lambda d: d["global_assertions"].append({"type": "final_url_match", "value": "/dashboard"}),
+    ],
+    ids=[
+        "description", "capability", "version", "target_url", "tenant_override_url",
+        "artifact_id", "author", "input_type", "credential_kind", "locator",
+        "safety_tier", "global_assertion",
+    ],
+)
+def test_editing_a_signed_field_fails_verification(edit):
+    with pytest.raises(IntegrityCheckFailed, match="does not match"):
+        verify(_hand_edited(_signed_artifact(), edit), TEST_KEY)
+
+
+def test_editing_timestamps_still_verifies():
+    def edit(d):
+        d["metadata"]["created_timestamp"] = "2030-01-01T00:00:00Z"
+        d["metadata"]["last_updated_timestamp"] = "2030-01-02T00:00:00Z"
+
+    verify(_hand_edited(_signed_artifact(), edit), TEST_KEY)  # should not raise
+
+
+def test_canonical_bytes_leave_out_the_signature_and_timestamps():
+    content = json.loads(canonical_bytes(_signed_artifact()))
+    assert not {"integrity_hash", "created_timestamp", "last_updated_timestamp"} & set(content["metadata"])
+
+
+def test_canonical_bytes_are_compact_with_sorted_keys():
+    raw = canonical_bytes(_signed_artifact()).decode("utf-8")
+    content = json.loads(raw)
+    assert raw == json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def test_failure_message_reveals_neither_key_nor_correct_signature():
+    tampered = _hand_edited(_signed_artifact(), lambda d: d["metadata"].update(version="9.9.9"))
+    with pytest.raises(IntegrityCheckFailed) as exc_info:
+        verify(tampered, TEST_KEY)
+    message = str(exc_info.value)
+    assert TEST_KEY.get_secret_value() not in message
+    assert compute_signature(tampered, TEST_KEY) not in message
