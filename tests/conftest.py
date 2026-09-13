@@ -32,7 +32,12 @@ def mock_bank_url():
 @pytest.fixture(scope="session")
 async def browser():
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch()
+        # The test server listens on IPv4 only; without this rule Chromium tries
+        # ::1 first and waits ~0.3-0.5 s per request before falling back.
+        # URLs still say localhost, so the real allowlist is exercised.
+        browser = await playwright.chromium.launch(
+            args=["--host-resolver-rules=MAP localhost 127.0.0.1"]
+        )
         yield browser
         await browser.close()
 
