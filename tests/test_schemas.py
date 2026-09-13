@@ -21,6 +21,7 @@ from src.types.artifact_schema import (
     OutputParamDefinition,
     ParamType,
 )
+from src.types.placeholders import find_placeholders
 from src.types.result_schema import (
     EvidencePaths,
     ExecutionResult,
@@ -186,7 +187,7 @@ def test_step_execution_trace_requires_positive_attempt_count():
         )
 
 
-# --- D025: output contract (EXTRACT_TEXT + output_key + output_definitions) ---
+# --- output contract (EXTRACT_TEXT + output_key + output_definitions) ---
 
 def _extract_step(output_key: str = "balance", sequence_index: int = 1) -> Step:
     return Step(
@@ -280,3 +281,55 @@ def test_artifact_rejects_two_steps_producing_same_output_key():
                 _extract_step(output_key="balance", sequence_index=2),
             ],
         )
+
+
+# --- option_value on dropdown steps ---
+
+def _select_step(input_value, option_value=None, action=ActionType.SELECT) -> Step:
+    return Step(
+        sequence_index=0,
+        action=action,
+        description="Choose an option",
+        locators=[_valid_locator()],
+        input_value=input_value,
+        option_value=option_value,
+    )
+
+
+def test_fixed_dropdown_with_label_and_hidden_value_constructs():
+    step = _select_step("Member Number", option_value="MEMNUM")
+    assert step.option_value == "MEMNUM"
+
+
+def test_input_driven_dropdown_without_hidden_value_constructs():
+    step = _select_step("{payee_name}")
+    assert step.option_value is None
+
+
+def test_input_driven_dropdown_with_hidden_value_rejected():
+    # The wrong-payee case: discovery's P001 frozen next to a payee input.
+    with pytest.raises(ValidationError):
+        _select_step("{payee_name}", option_value="P001")
+
+
+def test_hidden_value_on_non_select_step_rejected():
+    with pytest.raises(ValidationError):
+        _select_step("Log In", option_value="X", action=ActionType.CLICK)
+
+
+def test_hidden_value_without_label_rejected():
+    with pytest.raises(ValidationError):
+        _select_step(None, option_value="MEMNUM")
+
+
+def test_doubled_braces_are_literal_text_not_a_placeholder():
+    step = _select_step("Plan {{A}}", option_value="PLAN_A")
+    assert step.option_value == "PLAN_A"
+
+
+def test_find_placeholders():
+    assert find_placeholders("{payee_name}") == ["payee_name"]
+    assert find_placeholders("For member {member_id}, pay {amount}") == ["member_id", "amount"]
+    assert find_placeholders("{credential:bank_password}") == ["credential:bank_password"]
+    assert find_placeholders("Plan {{A}}") == []
+    assert find_placeholders("no placeholders here") == []

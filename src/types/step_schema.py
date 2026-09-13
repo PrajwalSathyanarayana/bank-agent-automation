@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field, model_validator
 import uuid
+from .placeholders import find_placeholders
 
 
 class SafetyTier(str, Enum):
@@ -85,10 +86,30 @@ class Step(BaseModel):
         "Required if and only if action is EXTRACT_TEXT.",
     )
 
+    option_value: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description="Hidden value of a fixed dropdown option. "
+        "Forbidden when the selection comes from an input.",
+    )
+
     @model_validator(mode="after")
     def validate_output_key_matches_extract_text(self) -> "Step":
         if self.action == ActionType.EXTRACT_TEXT and not self.output_key:
             raise ValueError("output_key is required when action is EXTRACT_TEXT")
         if self.action != ActionType.EXTRACT_TEXT and self.output_key:
             raise ValueError("output_key is only valid when action is EXTRACT_TEXT")
+        return self
+
+    @model_validator(mode="after")
+    def validate_option_value(self) -> "Step":
+        if self.option_value is None:
+            return self
+        if self.action != ActionType.SELECT:
+            raise ValueError("option_value is only valid on SELECT steps")
+        if not self.input_value:
+            raise ValueError("option_value requires the option's visible label in input_value")
+        if find_placeholders(self.input_value):
+            # A discovery-time hidden value would select the wrong option on fallback.
+            raise ValueError("option_value is not allowed when the selection comes from an input")
         return self
