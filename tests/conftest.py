@@ -7,6 +7,8 @@ import pytest
 from playwright.async_api import async_playwright
 from werkzeug.serving import make_server
 
+from src.config.settings import settings
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mock_bank"))
 from app import create_app  # noqa: E402
 import blueprints.member as member_routes  # noqa: E402
@@ -45,7 +47,15 @@ async def browser():
 @pytest.fixture
 async def page(browser, mock_bank_url):
     # A fresh context per test: no cookies, so every test starts signed out.
-    context = await browser.new_context(base_url=mock_bank_url)
+    # Same window and scale as discovery, so tests see what the model sees.
+    context = await browser.new_context(
+        base_url=mock_bank_url,
+        viewport={
+            "width": settings.discovery_viewport_width,
+            "height": settings.discovery_viewport_height,
+        },
+        device_scale_factor=settings.discovery_device_scale_factor,
+    )
     page = await context.new_page()
     yield page
     await context.close()

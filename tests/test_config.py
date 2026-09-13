@@ -60,6 +60,13 @@ def test_settings_discovery_limits():
     assert settings.discovery_llm_retries == 1
 
 
+def test_settings_discovery_perception():
+    assert settings.discovery_viewport_width == 1280
+    assert settings.discovery_viewport_height == 800
+    assert settings.discovery_device_scale_factor == 1
+    assert settings.discovery_max_elements == 100
+
+
 # --- secrets held as SecretStr ---
 
 def test_secrets_are_masked_when_printed():

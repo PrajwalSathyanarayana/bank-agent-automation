@@ -17,6 +17,13 @@ class Settings(BaseModel):
     discovery_llm_call_timeout_ms: int = 90_000
     discovery_page_action_timeout_ms: int = 30_000
     discovery_llm_retries: int = 1
+
+    # What the model sees each step: every mock bank page fits this window.
+    # Scale 1 keeps element boxes (CSS pixels) aligned with screenshot pixels.
+    discovery_viewport_width: int = 1280
+    discovery_viewport_height: int = 800
+    discovery_device_scale_factor: int = 1
+    discovery_max_elements: int = 100           # bounds the element list sent to the model
     replay_checkpoint_timeout_ms: int = 10_000  # 10 seconds per checkpoint
     replay_total_timeout_ms: int = 120_000      # 2 minutes total
 
