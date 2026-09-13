@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 .env
 *.env
+# docs
+docs/
+
 
 # Evidence and artifacts (runtime generated)
 evidence/
@@ -24,3 +27,6 @@ desktop.ini
 
 # Assessment
 assessment.pdf
+
+# Architecture Diagram
+1A_Main_Architecture_Diagram.png
