@@ -9,6 +9,15 @@ from src.config.env import env
 from src.config.settings import settings
 from src.safety.redactor import redact_dict, scrub_known_values
 
+# Named, not all of env: a secret mistyped as a plain str must not reach the evidence.
+_LOGGED_ENV_FIELDS = ("anthropic_model", "mock_bank_base_url")
+
+
+def _resolved_settings() -> dict:
+    resolved = settings.model_dump(mode="json")
+    resolved.update({name: getattr(env, name) for name in _LOGGED_ENV_FIELDS})
+    return resolved
+
 
 class RunLogger:
     """Structured JSON evidence logger, one instance per discovery or
@@ -61,7 +70,12 @@ class RunLogger:
     def execution_started(self, goal: str) -> None:
         self._emit(
             "EXECUTION_STARTED",
-            {"goal": goal, "mode": self.mode, "capability": self.capability},
+            {
+                "goal": goal,
+                "mode": self.mode,
+                "capability": self.capability,
+                "resolved_settings": _resolved_settings(),
+            },
         )
 
     def step_fetched(self, step_id: str, index: int, action: str) -> None:

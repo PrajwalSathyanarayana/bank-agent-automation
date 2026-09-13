@@ -86,6 +86,38 @@ def test_signing_key_scrubbed_from_free_text(tmp_path, monkeypatch):
     assert "[REDACTED]" in raw
 
 
+def test_execution_started_records_resolved_settings(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    logger.execution_started(goal="test goal")
+    logged = _read_lines(logger.log_path)[0]["resolved_settings"]
+    assert logged["discovery_max_steps"] == settings_module.settings.discovery_max_steps
+    assert logged["evidence_dir"] == str(tmp_path)
+    assert logged["anthropic_model"] == env.anthropic_model
+    assert logged["mock_bank_base_url"] == env.mock_bank_base_url
+
+
+def test_resolved_settings_hold_only_settings_and_named_env_values(tmp_path, monkeypatch):
+    # Fails closed: any other env value (username, secrets) must stay out.
+    logger = _make_logger(tmp_path, monkeypatch)
+    logger.execution_started(goal="test goal")
+    logged = _read_lines(logger.log_path)[0]["resolved_settings"]
+    expected = set(settings_module.Settings.model_fields) | {"anthropic_model", "mock_bank_base_url"}
+    assert set(logged) == expected
+
+
+def test_first_line_contains_no_secret_values(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    logger.execution_started(goal="test goal")
+    raw = logger.log_path.read_text(encoding="utf-8")
+    for secret in (
+        env.anthropic_api_key,
+        env.mock_bank_secret_key,
+        env.mock_bank_password,
+        env.artifact_signing_key,
+    ):
+        assert secret.get_secret_value() not in raw
+
+
 def test_recovery_event_handles_optional_fields(tmp_path, monkeypatch):
     logger = _make_logger(tmp_path, monkeypatch)
     logger.recovery_event(tier="TIER_1_RULE")
