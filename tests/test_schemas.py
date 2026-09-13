@@ -23,7 +23,7 @@ from src.types.artifact_schema import (
     OutputParamDefinition,
     ParamType,
 )
-from src.types.placeholders import find_placeholders
+from src.types.placeholders import find_placeholders, iter_placeholders
 from src.types.result_schema import (
     EvidencePaths,
     ExecutionResult,
@@ -46,11 +46,11 @@ def _valid_step(sequence_index: int = 0) -> Step:
     )
 
 
-def _valid_metadata() -> ArtifactMetadata:
+def _valid_metadata(description: str = "Read the member's savings balance.") -> ArtifactMetadata:
     now = datetime.now(timezone.utc)
     return ArtifactMetadata(
         capability="member-lookup",
-        description="For member {member_id}, read the savings balance.",
+        description=description,
         version="1.0.0",
         integrity_hash="a" * 64,
         target_url="http://localhost:5000/search",
@@ -413,3 +413,141 @@ def test_metadata_rejects_an_empty_description():
             created_timestamp=now,
             last_updated_timestamp=now,
         )
+
+
+# --- placeholders checked against the artifact's inputs and credentials ---
+
+def _step_with(action=ActionType.TYPE, input_value=None, locator_value="#member-id",
+               checkpoints=None) -> Step:
+    return Step(
+        sequence_index=0,
+        action=action,
+        description="Fill the field",
+        locators=[Locator(type=LocatorType.CSS, value=locator_value, priority=0)],
+        input_value=input_value,
+        checkpoints=checkpoints or [],
+    )
+
+
+def _artifact_with(step: Step, description: str = "Read the member's savings balance.",
+                   assertions=None) -> Artifact:
+    return Artifact(
+        metadata=_valid_metadata(description),
+        input_parameters=[
+            InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID")
+        ],
+        credentials=[_credential("bank_password")],
+        steps=[step],
+        global_assertions=assertions or [],
+    )
+
+
+def test_step_has_no_separate_input_parameter_field():
+    # Placeholders in the text are the only way a step refers to an input.
+    assert "input_parameter" not in Step.model_fields
+
+
+def test_iter_placeholders_reports_positions():
+    assert list(iter_placeholders("/member/{member_id}/accounts")) == [("member_id", 8, 19)]
+
+
+def test_declared_input_in_typed_value_accepted():
+    artifact = _artifact_with(_step_with(input_value="{member_id}"))
+    assert artifact.steps[0].input_value == "{member_id}"
+
+
+def test_undeclared_input_rejected():
+    with pytest.raises(ValidationError, match="not a declared input"):
+        _artifact_with(_step_with(input_value="{memberid}"))
+
+
+def test_credential_in_typed_value_accepted():
+    artifact = _artifact_with(_step_with(input_value="{credential:bank_password}"))
+    assert artifact.steps[0].input_value == "{credential:bank_password}"
+
+
+def test_credential_not_in_credentials_list_rejected():
+    with pytest.raises(ValidationError, match="not in the credentials list"):
+        _artifact_with(_step_with(input_value="{credential:bank_pin}"))
+
+
+def test_credential_in_dropdown_choice_rejected():
+    with pytest.raises(ValidationError, match="only appear in typed values"):
+        _artifact_with(_step_with(action=ActionType.SELECT, input_value="{credential:bank_password}"))
+
+
+def test_credential_in_description_rejected():
+    with pytest.raises(ValidationError, match="only appear in typed values"):
+        _artifact_with(_step_with(), description="Log in with {credential:bank_password}.")
+
+
+def test_credential_in_checkpoint_rejected():
+    checkpoint = StepCheckpoint(
+        type=CheckpointType.VALUE_EQUALS,
+        target_locator=_valid_locator(),
+        expected_value="{credential:bank_password}",
+    )
+    with pytest.raises(ValidationError, match="only appear in typed values"):
+        _artifact_with(_step_with(checkpoints=[checkpoint]))
+
+
+def test_unknown_placeholder_prefix_rejected():
+    with pytest.raises(ValidationError, match="unknown placeholder"):
+        _artifact_with(_step_with(input_value="{env:bank_password}"))
+
+
+def test_description_with_declared_input_accepted():
+    artifact = _artifact_with(_step_with(), description="For member {member_id}, read the balance.")
+    assert "{member_id}" in artifact.metadata.description
+
+
+def test_description_with_undeclared_input_rejected():
+    with pytest.raises(ValidationError, match="not a declared input"):
+        _artifact_with(_step_with(), description="Pay {amount} to the payee.")
+
+
+@pytest.mark.parametrize(
+    "locator_value",
+    ['a[href="/member/{member_id}"]', "//a[@href='/member/{member_id}/accounts']"],
+)
+def test_placeholder_as_whole_address_segment_accepted(locator_value):
+    artifact = _artifact_with(_step_with(action=ActionType.CLICK, locator_value=locator_value))
+    assert artifact.steps[0].locators[0].value == locator_value
+
+
+@pytest.mark.parametrize(
+    "locator_value",
+    ['a[href="/member{member_id}"]', 'a[href="/member/{member_id}x"]', "text=Member {member_id}"],
+)
+def test_placeholder_inside_a_segment_or_text_locator_rejected(locator_value):
+    with pytest.raises(ValidationError, match="whole address segment"):
+        _artifact_with(_step_with(action=ActionType.CLICK, locator_value=locator_value))
+
+
+def test_url_check_placeholder_must_be_a_whole_segment():
+    whole = StepCheckpoint(type=CheckpointType.URL_CONTAINS, target_locator=_valid_locator(),
+                           expected_value="/member/{member_id}/accounts")
+    partial = StepCheckpoint(type=CheckpointType.URL_CONTAINS, target_locator=_valid_locator(),
+                             expected_value="/member-{member_id}")
+    _artifact_with(_step_with(checkpoints=[whole]))
+    with pytest.raises(ValidationError, match="whole address segment"):
+        _artifact_with(_step_with(checkpoints=[partial]))
+
+
+def test_text_check_may_use_an_input_anywhere():
+    checkpoint = StepCheckpoint(type=CheckpointType.TEXT_MATCH, target_locator=_valid_locator(),
+                                expected_value="Member #{member_id}")
+    artifact = _artifact_with(_step_with(checkpoints=[checkpoint]))
+    assert artifact.steps[0].checkpoints[0].expected_value == "Member #{member_id}"
+
+
+def test_final_address_assertion_placeholder_must_be_a_whole_segment():
+    assertion = GlobalAssertion(type=GlobalAssertionType.FINAL_URL_MATCH, value="/member{member_id}")
+    with pytest.raises(ValidationError, match="whole address segment"):
+        _artifact_with(_step_with(), assertions=[assertion])
+
+
+@pytest.mark.parametrize("bad_key", ["member id", "member:id", "MemberId", "1member", ""])
+def test_input_key_must_be_a_simple_name(bad_key):
+    with pytest.raises(ValidationError):
+        InputParamDefinition(key=bad_key, type=ParamType.STRING, description="Member ID")

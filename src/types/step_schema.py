@@ -39,12 +39,6 @@ class Locator(BaseModel):
     )
 
 
-class StepParameter(BaseModel):
-    param_key: str = Field(min_length=1)
-    is_sensitive: bool = False
-    description: Optional[str] = None
-
-
 class CheckpointType(str, Enum):
     ELEMENT_VISIBLE = "element_visible"
     TEXT_MATCH = "text_match"
@@ -76,7 +70,6 @@ class Step(BaseModel):
     description: str = Field(min_length=1)
     locators: list[Locator] = Field(min_length=1)
     safety_tier: SafetyTier = SafetyTier.SAFE
-    input_parameter: Optional[StepParameter] = None
     input_value: Optional[str] = None
     checkpoints: list[StepCheckpoint] = Field(default_factory=list)
     retry_budget: RetryBudget = Field(default_factory=RetryBudget)
