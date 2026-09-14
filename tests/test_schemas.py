@@ -26,7 +26,9 @@ from src.types.artifact_schema import (
     OutputType,
     ParamType,
 )
+from src.types import versioning
 from src.types.placeholders import MissingValue, fill_text, find_placeholders, iter_placeholders
+from src.types.versioning import Change, UnruledField, bump, change_between, parse_version, version_text
 from src.types.result_schema import (
     EvidencePaths,
     ExecutionResult,
@@ -549,6 +551,106 @@ def test_an_artifact_saved_before_known_outcomes_existed_still_loads():
     data = _artifact_with_outcomes().model_dump(mode="json")
     del data["known_outcomes"]
     assert Artifact.model_validate(data).known_outcomes == []
+
+
+# --- versions ---
+
+def test_versions_compare_as_numbers_not_text():
+    assert parse_version("1.10.0") > parse_version("1.9.0")
+    assert version_text((2, 0, 0)) == "2.0.0"
+
+
+@pytest.mark.parametrize("text", ["1.0", "v1.0.0", "1.0.0-beta", "", "1.x.0"])
+def test_anything_but_three_numbers_is_not_a_version(text):
+    with pytest.raises(ValueError):
+        parse_version(text)
+
+
+@pytest.mark.parametrize(
+    "change, expected",
+    [(Change.MAJOR, (2, 0, 0)), (Change.MINOR, (1, 5, 0)), (Change.PATCH, (1, 4, 3)), (Change.NONE, (1, 4, 2))],
+)
+def test_each_kind_of_change_bumps_its_own_part(change, expected):
+    assert bump((1, 4, 2), change) == expected
+
+
+def _recording() -> dict:
+    # Open the page, type the member, read the balance. Built fresh on every call, so each
+    # copy has its own generated ids and timestamps.
+    return Artifact(
+        metadata=_valid_metadata("For member {member_id}, read the balance."),
+        input_parameters=[InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID")],
+        output_definitions=[_money()],
+        steps=[
+            Step(sequence_index=0, action=ActionType.NAVIGATE, description="Open the search page"),
+            Step(sequence_index=1, action=ActionType.TYPE, description="Type the member", input_value="{member_id}",
+                 locators=[_valid_locator()],
+                 checkpoints=[_checkpoint(CheckpointType.PAGE_PATH, expected_value="/search")]),
+            _extract_step(output_key="balance", sequence_index=2),
+        ],
+    ).model_dump(mode="json")
+
+
+def _add_a_click(data: dict) -> None:
+    click = {**data["steps"][1], "action": "click", "input_value": None, "checkpoints": []}
+    del click["step_id"]
+    data["steps"].insert(2, click)
+    for index, step in enumerate(data["steps"]):
+        step["sequence_index"] = index
+
+
+def _set(path, value):
+    def edit(data):
+        *parents, last = path
+        for part in parents:
+            data = data[part]
+        data[last] = value
+    return edit
+
+
+@pytest.mark.parametrize(
+    "edit, expected",
+    [
+        pytest.param(lambda data: None, Change.NONE, id="same flow, new ids and timestamps"),
+        pytest.param(_set(("metadata", "version"), "1.4.2"), Change.NONE, id="version is not content"),
+        pytest.param(_set(("steps", 1, "locators", 0, "value"), "input[name='member']"), Change.PATCH,
+                     id="a locator"),
+        pytest.param(_set(("steps", 1, "description"), "Enter the member ID"), Change.PATCH, id="wording"),
+        pytest.param(_set(("steps", 1, "checkpoints", 0, "expected_value"), "/search/go"), Change.PATCH,
+                     id="a check"),
+        pytest.param(_set(("steps", 1, "safety_tier"), "RISKY"), Change.MINOR, id="a step's risk"),
+        pytest.param(_set(("steps", 1, "input_value"), "Member {member_id}"), Change.MINOR, id="what is typed"),
+        pytest.param(_add_a_click, Change.MINOR, id="an extra step"),
+        pytest.param(_set(("metadata", "description"), "For member {member_id}, read it."), Change.MAJOR,
+                     id="the goal template"),
+        pytest.param(_set(("metadata", "target_url"), "http://localhost:5000/login"), Change.MAJOR,
+                     id="the start page"),
+        pytest.param(_set(("input_parameters", 0, "type"), "number"), Change.MAJOR, id="an input's type"),
+        pytest.param(_set(("output_definitions", 0, "description"), "Savings balance"), Change.MAJOR,
+                     id="an output"),
+        pytest.param(_set(("known_outcomes",), [_outcome().model_dump(mode="json")]), Change.MAJOR,
+                     id="a new known outcome"),
+    ],
+)
+def test_a_new_recording_is_a_change_of_the_largest_kind_it_contains(edit, expected):
+    old, new = _recording(), _recording()
+    edit(new)
+    assert change_between(Artifact.model_validate(old), Artifact.model_validate(new)) == expected
+
+
+def test_a_contract_change_outranks_a_detail_change():
+    old, new = _recording(), _recording()
+    _set(("steps", 1, "description"), "Enter the member ID")(new)
+    _set(("metadata", "target_url"), "http://localhost:5000/login")(new)
+    assert change_between(Artifact.model_validate(old), Artifact.model_validate(new)) == Change.MAJOR
+
+
+def test_a_field_with_no_versioning_rule_stops_the_comparison(monkeypatch):
+    # Stands in for a field added to the schema later and never given a rule.
+    monkeypatch.setattr(versioning, "_COMPARED", versioning._COMPARED - {"known_outcomes"})
+    artifact = Artifact.model_validate(_recording())
+    with pytest.raises(UnruledField, match="known_outcomes"):
+        change_between(artifact, artifact)
 
 
 # --- option_value on dropdown steps ---
