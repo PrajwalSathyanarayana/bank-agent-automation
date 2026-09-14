@@ -1,8 +1,12 @@
+from decimal import Decimal
+
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
 from src.locating.checks import element_wording, find_phrase, is_password_box, phrase_matches, shows_phrase
 from src.locating.resolver import UnfillableLocator, css_string, fill, resolve
+from src.locating.values import UnreadableValue, read_money, read_number, read_output
+from src.types.artifact_schema import OutputParamDefinition, OutputType
 from src.types.step_schema import Locator, LocatorType
 
 QUIRKS_DOCTYPE = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">'
@@ -226,3 +230,98 @@ async def test_find_phrase_returns_the_innermost_visible_matches(page, body, exp
     await _set_page(page, body)
     found = await find_phrase(page, "Payment submitted")
     assert [await handle.get_attribute("id") for handle in found] == expected
+
+
+# --- reading a value as the type an output declares ---
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        pytest.param("$2450.32", "2450.32", id="as the bank shows it"),
+        pytest.param("$2,450.32", "2450.32", id="thousands comma"),
+        pytest.param("$1,234,567.89", "1234567.89", id="several groups"),
+        pytest.param("2450.32", "2450.32", id="no symbol"),
+        pytest.param("  $50.00 ", "50.00", id="spaces around"),
+        pytest.param("\xa0$50.00", "50.00", id="non-breaking space"),
+        pytest.param("$ 50.00", "50.00", id="space after the symbol"),
+        pytest.param("$50", "50.00", id="whole dollars"),
+        pytest.param("$50.5", "50.50", id="one decimal place"),
+        pytest.param("USD 50.00", "50.00", id="code before"),
+        pytest.param("50.00 USD", "50.00", id="code after"),
+        pytest.param("-$50.00", "-50.00", id="minus before the symbol"),
+        pytest.param("$-50.00", "-50.00", id="minus after the symbol"),
+        pytest.param("($50.00)", "-50.00", id="brackets"),
+        pytest.param("-$0.00", "0.00", id="zero is never negative"),
+    ],
+)
+def test_money_is_read_exactly_to_the_cent(text, expected):
+    assert f"{read_money(text, 'USD'):f}" == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("$", id="symbol only"),
+        pytest.param("Primary Account Balance: $2450.32", id="label read with the value"),
+        pytest.param("$2,45.32", id="broken thousands group"),
+        pytest.param("50,00", id="decimal comma"),
+        pytest.param("$2450.321", id="finer than a cent"),
+        pytest.param("€50.00", id="another currency's symbol"),
+        pytest.param("--$50.00", id="two minus signs"),
+        pytest.param("($-50.00)", id="brackets and a minus"),
+        pytest.param("$50.00)", id="unbalanced bracket"),
+        pytest.param("1.2.3", id="two decimal points"),
+        pytest.param("$٥٠.00", id="non-ASCII digits"),
+    ],
+)
+def test_anything_else_is_refused_as_money_not_guessed(text):
+    with pytest.raises(UnreadableValue, match="is not a USD amount"):
+        read_money(text, "USD")
+
+
+def test_money_adds_up_exactly():
+    # Why money is never a float: 0.10 + 0.20 is not 0.30 in floating point.
+    assert read_money("$0.10", "USD") + read_money("$0.20", "USD") == Decimal("0.30")
+
+
+def test_only_currencies_with_a_reading_rule_are_read():
+    with pytest.raises(UnreadableValue, match="no rule for reading EUR amounts"):
+        read_money("50.00", "EUR")
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [pytest.param("3", 3, id="whole"), pytest.param("1,204", 1204, id="thousands comma"),
+     pytest.param("-7", -7, id="negative"), pytest.param(" 12.5 ", 12.5, id="decimal")],
+)
+def test_a_number_stays_whole_unless_it_has_a_decimal_point(text, expected):
+    value = read_number(text)
+    assert value == expected and type(value) is type(expected)
+
+
+@pytest.mark.parametrize("text", ["", "-", "$3", "3 items", "1,20"])
+def test_anything_else_is_refused_as_a_number(text):
+    with pytest.raises(UnreadableValue, match="is not a number"):
+        read_number(text)
+
+
+@pytest.mark.parametrize(
+    "definition, text, expected",
+    [
+        pytest.param(OutputParamDefinition(key="balance", type=OutputType.MONEY, description="Balance",
+                                           currency="USD"), "$2,450.32", "2450.32", id="money as decimal text"),
+        pytest.param(OutputParamDefinition(key="count", type=OutputType.NUMBER, description="Count"),
+                     "1,204", 1204, id="number"),
+        pytest.param(OutputParamDefinition(key="kind", type=OutputType.STRING, description="Account type"),
+                     "Checking", "Checking", id="text as read"),
+    ],
+)
+def test_an_output_is_returned_as_its_declared_type(definition, text, expected):
+    assert read_output(text, definition) == expected
+
+
+def test_a_refusal_quotes_the_page_text_but_never_a_whole_page():
+    with pytest.raises(UnreadableValue) as refused:
+        read_money("x" * 500, "USD")
+    assert len(str(refused.value)) < 120
