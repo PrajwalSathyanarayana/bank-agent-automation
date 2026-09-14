@@ -412,6 +412,22 @@ def _next_to_label_xpath(tag: str, label: str) -> Optional[str]:
     )
 
 
+def label_cell_value_xpath(label_text: str) -> Optional[str]:
+    """The cell right after the cell whose whole text is this label, in the same row.
+
+    How legacy pages show a value: label and value side by side in a table row. Anchored
+    on the label, which is the same for every record, never on the value. None when the
+    label holds both kinds of quote.
+    """
+    literal = _xpath_literal(label_text)
+    if literal is None:
+        return None
+    return (
+        f"//{_CELL}[normalize-space(translate(., ' ', ' '))={literal}]"
+        f"/following-sibling::{_CELL}[1]"
+    )
+
+
 def _xpath_literal(text: str) -> Optional[str]:
     # XPath 1.0 strings have no escape character: use whichever quote the text lacks,
     # and give up on text containing both rather than guess.
