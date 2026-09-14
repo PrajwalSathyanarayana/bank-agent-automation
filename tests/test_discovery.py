@@ -26,7 +26,7 @@ from src.discovery.locators import (
     prove,
     scan,
 )
-from src.discovery.recorder import Action, AssertionRefused, Recorder, RecordingError
+from src.discovery.recorder import Action, AssertionRefused, Recorder, RecordingError, TypingRefused
 from src.locating.checks import element_wording, shows_phrase
 from src.locating.resolver import resolve
 from src.observability.logger import RunLogger
@@ -1338,8 +1338,9 @@ async def _start_on_html(recorder, page, body):
 async def _draft_on(recorder, page, description_start, action):
     observation = await observe(page)
     element = next(element for element in observation.elements if element.description.startswith(description_start))
-    derived = await derive_locators(page, element, _bank_run())
-    step = await recorder.draft_step(action, element.handle, derived, page.url)
+    run = _bank_run()
+    derived = await derive_locators(page, element, run)
+    step = await recorder.draft_step(action, element.handle, derived, page.url, run=run)
     return element, derived, step
 
 
@@ -1554,6 +1555,71 @@ async def test_commit_requires_the_derived_locators_argument(page, recorder):
     await page.goto("/login")
     with pytest.raises(TypeError):
         await recorder.commit(recorder.draft_start(page.url), page, _bank_run())
+
+
+# Typing into password boxes
+
+@pytest.mark.anyio
+async def test_secret_into_the_real_password_box_is_drafted(page, recorder):
+    await _start(recorder, page)
+    _, _, step = await _draft_on(recorder, page, "password box",
+                                 Action(ActionType.TYPE, "Enter the password", "{credential:bank_password}"))
+    assert (step.action, step.input_value) == (ActionType.TYPE, "{credential:bank_password}")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        pytest.param("password box", "not-our-password", "a password box only takes a secret reference",
+                     id="literal into password box"),
+        pytest.param("password box", "{credential:bank_username}", "a password box only takes a secret reference",
+                     id="username into password box"),
+        pytest.param("password box", "{member_id}", "a password box only takes a secret reference",
+                     id="input into password box"),
+        pytest.param('text box, left label "Username:"', "{credential:bank_password}",
+                     "is a secret and can only be typed into a password box", id="secret into username box"),
+    ],
+)
+async def test_wrong_typing_on_the_real_sign_on_page_is_refused_before_a_key_is_pressed(
+    page, recorder, run_logger, field, value, message
+):
+    await _start(recorder, page)
+    with pytest.raises(TypingRefused, match=message):
+        await _draft_on(recorder, page, field, Action(ActionType.TYPE, "Type it", value))
+    assert await page.input_value('input[name="username"]') == ""
+    assert await page.input_value('input[name="password"]') == ""
+    assert len(recorder.steps) == 1
+    assert len(_log_lines(run_logger)) == 1
+
+
+@pytest.mark.anyio
+async def test_our_real_password_typed_as_a_literal_is_refused_and_never_shown(page, recorder, run_logger):
+    # The logger scrubs only the configured secrets, so a fake one proves the value never
+    # reached the log at all rather than being scrubbed on the way.
+    run = RunValues(secrets={"bank_password": SecretStr(FAKE_PASSWORD)})
+    await _start(recorder, page, run=run)
+    observation = await observe(page)
+    box = next(element for element in observation.elements if element.description.startswith("password box"))
+    derived = await derive_locators(page, box, run)
+    with pytest.raises(TypingRefused) as refused:
+        await recorder.draft_step(Action(ActionType.TYPE, "Enter the password", FAKE_PASSWORD),
+                                  box.handle, derived, page.url, run=run)
+    assert FAKE_PASSWORD not in str(refused.value)
+    assert FAKE_PASSWORD not in run_logger.log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_clicking_a_password_box_is_not_a_typing_check(page, recorder):
+    await _start(recorder, page)
+    _, _, step = await _draft_on(recorder, page, "password box", Action(ActionType.CLICK, "Focus the password box"))
+    assert step.action == ActionType.CLICK
+
+
+def test_draft_step_requires_this_runs_values(recorder):
+    # A required keyword, so no caller can skip the check by leaving out the secrets.
+    with pytest.raises(TypeError, match="run"):
+        recorder.draft_step(Action(ActionType.TYPE, "Type it", "x"), None, None, "about:blank")
 
 
 # Assertions by text

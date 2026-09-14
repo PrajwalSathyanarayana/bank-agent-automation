@@ -1,7 +1,7 @@
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
-from src.locating.checks import element_wording, find_phrase, phrase_matches, shows_phrase
+from src.locating.checks import element_wording, find_phrase, is_password_box, phrase_matches, shows_phrase
 from src.locating.resolver import UnfillableLocator, css_string, fill, resolve
 from src.types.step_schema import Locator, LocatorType
 
@@ -140,6 +140,36 @@ async def test_element_wording_never_reads_a_password_or_typed_value(page):
     await page.fill("#t", "10234")
     assert await element_wording(await page.query_selector("#p")) == []
     assert await element_wording(await page.query_selector("#t")) == []
+
+
+# --- what kind of field typing goes into ---
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "field, expected",
+    [
+        pytest.param('<input id="f" type="password">', True, id="password"),
+        pytest.param('<input id="f" type="PASSWORD">', True, id="type in capitals"),
+        pytest.param('<input id="f" type="text">', False, id="text box"),
+        pytest.param('<input id="f" type="text" style="-webkit-text-security: disc">', False,
+                     id="masked only by styling"),
+        pytest.param('<input id="f">', False, id="no type"),
+        pytest.param('<div id="f" type="password">x</div>', False, id="div with a type attribute"),
+        pytest.param('<input id="f" type="submit" value="Log In">', False, id="submit button"),
+    ],
+)
+async def test_is_password_box_reads_the_element_type(page, field, expected):
+    await _set_page(page, field)
+    assert await is_password_box(await page.query_selector("#f")) is expected
+
+
+@pytest.mark.anyio
+async def test_a_password_box_switched_to_text_is_no_longer_one(page):
+    # A "show password" toggle: the live type decides, not the one the page loaded with.
+    await _set_page(page, '<input id="f" type="password">')
+    field = await page.query_selector("#f")
+    await page.evaluate("document.getElementById('f').type = 'text'")
+    assert not await is_password_box(field)
 
 
 # --- assertion text: one rule for discovery and replay ---

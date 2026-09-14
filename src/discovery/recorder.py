@@ -19,9 +19,10 @@ from src.discovery.locators import (
     scan,
 )
 from src.discovery.perception import Box, ElementFacts, PageElement
-from src.locating.checks import element_wording, find_phrase
+from src.locating.checks import element_wording, find_phrase, is_password_box
 from src.observability.logger import RunLogger
 from src.safety.classifier import classify
+from src.safety.secret_typing import typing_refusal
 from src.types.placeholders import find_placeholders
 from src.types.step_schema import ActionType, CheckpointType, LocatorType, Step, StepCheckpoint
 
@@ -47,6 +48,10 @@ class RecordingError(RuntimeError):
 
 class AssertionRefused(RecordingError):
     """The model's assertion can't be recorded; the message says why, worded for the model."""
+
+
+class TypingRefused(RecordingError):
+    """The value can't be typed into this field; nothing was typed. Worded for the model."""
 
 
 # The basic facts locators.py needs about an element found by its text rather than
@@ -116,18 +121,38 @@ class Recorder:
         return _with_tier(step, start_url, wording=[])
 
     async def draft_step(
-        self, action: Action, element: ElementHandle, derived: DerivedLocators, current_url: str
+        self,
+        action: Action,
+        element: ElementHandle,
+        derived: DerivedLocators,
+        current_url: str,
+        *,
+        run: RunValues,
     ) -> Step:
         """The step for an action about to run on `element`, with its proven locators.
 
         The model's text is stored as written. Its placeholders are the intended ones;
         a literal value that slipped through (a member ID typed out instead of
         {member_id}) is caught by the save-time backstop scan, not here.
+
+        Typing is the exception, checked here because a step is drafted before its action
+        runs: a password box takes exactly one secret placeholder and a secret placeholder
+        goes only into a password box. Anything else raises TypingRefused before a key is
+        pressed, so a wrong password never reaches the bank and a secret never shows on
+        screen. run names this run's secrets.
         """
         if action.kind not in RECORDED_ACTIONS:
             raise RecordingError(f"{action.kind.value} is not one of the model's recorded actions")
         if not self._steps:
             raise RecordingError("the start step must be recorded before any action")
+        if action.kind == ActionType.TYPE:
+            refusal = typing_refusal(
+                action.value or "",
+                into_password_box=await is_password_box(element),
+                secret_names=run.secrets.keys(),
+            )
+            if refusal:
+                raise TypingRefused(refusal)
 
         option_value = None
         if action.kind == ActionType.SELECT and action.value and not find_placeholders(action.value):
@@ -172,7 +197,7 @@ class Recorder:
             target = PageElement(number=0, facts=facts, description="", in_viewport=True, handle=element)
             derived = await derive_locators(page, target, run)
             step = await self.draft_step(
-                Action(ActionType.ASSERT_TEXT, reason, value=phrase), element, derived, page.url
+                Action(ActionType.ASSERT_TEXT, reason, value=phrase), element, derived, page.url, run=run
             )
             return DraftedAssertion(step, derived)
         finally:

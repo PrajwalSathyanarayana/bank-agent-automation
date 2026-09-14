@@ -23,6 +23,7 @@ from src.safety.integrity import (
     verify,
 )
 from src.safety.redactor import REDACTED, redact_dict, redact_text, scrub_known_values
+from src.safety.secret_typing import typing_refusal
 from src.types.artifact_schema import (
     Artifact,
     ArtifactMetadata,
@@ -409,3 +410,50 @@ def test_failure_message_reveals_neither_key_nor_correct_signature():
     message = str(exc_info.value)
     assert TEST_KEY.get_secret_value() not in message
     assert compute_signature(tampered, TEST_KEY) not in message
+
+
+# --- what may be typed where ---
+
+SECRET_NAMES = {"bank_password"}
+
+
+@pytest.mark.parametrize(
+    "value, into_password_box, allowed",
+    [
+        pytest.param("{credential:bank_password}", True, True, id="secret into password box"),
+        pytest.param("Zq9-not-the-real-password", True, False, id="literal into password box"),
+        pytest.param("{member_id}", True, False, id="input into password box"),
+        pytest.param("{credential:bank_username}", True, False, id="config credential into password box"),
+        pytest.param(" {credential:bank_password}", True, False, id="space before the secret"),
+        pytest.param("{credential:bank_password}x", True, False, id="text after the secret"),
+        pytest.param("{credential:bank_password}{credential:bank_password}", True, False, id="secret twice"),
+        pytest.param("", True, False, id="empty into password box"),
+        pytest.param("{{credential:bank_password}}", True, False, id="doubled braces are literal text"),
+        pytest.param("{credential:bank_password}", False, False, id="secret into text box"),
+        pytest.param("Pass: {credential:bank_password}", False, False, id="secret inside other text"),
+        pytest.param("{credential:bank_username}", False, True, id="config credential into text box"),
+        pytest.param("{member_id}", False, True, id="input into text box"),
+        pytest.param("50.00", False, True, id="literal into text box"),
+        pytest.param("", False, True, id="empty into text box"),
+    ],
+)
+def test_a_password_box_takes_exactly_one_secret_and_a_secret_goes_nowhere_else(value, into_password_box, allowed):
+    refusal = typing_refusal(value, into_password_box=into_password_box, secret_names=SECRET_NAMES)
+    assert (refusal is None) == allowed
+
+
+@pytest.mark.parametrize(
+    "value, into_password_box, secret_names, expected",
+    [
+        pytest.param("x", True, {"pin", "bank_password"},
+                     "a password box only takes a secret reference, exactly {credential:bank_password} or "
+                     "{credential:pin}, with nothing else", id="names every secret, sorted"),
+        pytest.param("x", True, set(), "a password box only takes a secret reference, and this run has none",
+                     id="run with no secrets"),
+        pytest.param("{credential:bank_password}", False, SECRET_NAMES,
+                     "{credential:bank_password} is a secret and can only be typed into a password box",
+                     id="secret outside a password box"),
+    ],
+)
+def test_refusal_wording(value, into_password_box, secret_names, expected):
+    assert typing_refusal(value, into_password_box=into_password_box, secret_names=secret_names) == expected

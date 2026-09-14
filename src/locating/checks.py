@@ -28,6 +28,17 @@ _WORDING = """(element) => {
 }"""
 
 
+async def is_password_box(element: ElementHandle) -> bool:
+    """Whether the element is a password box: an <input type="password">.
+
+    Read from the live element when typing is about to happen, never from an earlier
+    reading, and without touching its value. The browser reports the type in lower case
+    whatever the page wrote. A text box made to look masked only by styling is not a
+    password box.
+    """
+    return await element.evaluate('(element) => element.tagName === "INPUT" && element.type === "password"')
+
+
 async def element_wording(element: ElementHandle) -> list[str]:
     """What the element itself says, for the safety classifier.
 

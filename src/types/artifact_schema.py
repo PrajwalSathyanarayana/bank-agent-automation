@@ -4,11 +4,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
 import uuid
 import re
-from .placeholders import find_placeholders, iter_placeholders
+from .placeholders import CREDENTIAL_PREFIX, find_placeholders, iter_placeholders
 from .step_schema import ActionType, CheckpointType, Step
 
 _SIMPLE_NAME = r"^[a-z][a-z0-9_]*$"
-_CREDENTIAL_PREFIX = "credential"
 _ADDRESS_SEGMENT_END = set("/\"'?#&")
 # Checkpoints whose expected value is an address, so placeholders there must be whole segments.
 _ADDRESS_CHECKS = {CheckpointType.URL_CONTAINS, CheckpointType.PAGE_PATH}
@@ -239,7 +238,7 @@ def _check_placeholders(
     for name, start, end in iter_placeholders(text):
         if ":" in name:
             prefix, key = name.split(":", 1)
-            if prefix != _CREDENTIAL_PREFIX:
+            if prefix != CREDENTIAL_PREFIX:
                 raise ValueError(f"{where}: unknown placeholder {{{name}}}")
             if key not in credentials:
                 raise ValueError(f"{where}: {{{name}}} is not in the credentials list")
