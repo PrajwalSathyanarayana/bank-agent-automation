@@ -20,12 +20,17 @@ from src.types.artifact_schema import (
     CredentialKind,
     GlobalAssertion,
     GlobalAssertionType,
+    CompareAs,
+    ConfirmationCheck,
     InputParamDefinition,
+    InterruptionSignal,
+    KnownInterruption,
     KnownOutcome,
     OutcomeSignal,
     OutputParamDefinition,
     OutputType,
     ParamType,
+    RecoveryAction,
 )
 from src.types import versioning
 from src.types.placeholders import MissingValue, fill_text, find_placeholders, iter_placeholders
@@ -649,6 +654,115 @@ def test_an_artifact_saved_before_known_outcomes_existed_still_loads():
     assert Artifact.model_validate(data).known_outcomes == []
 
 
+# --- known interruptions and confirmation checks ---
+
+def _css(value) -> Locator:
+    return Locator(type=LocatorType.CSS, value=value, priority=0)
+
+
+def _interruption(**overrides) -> KnownInterruption:
+    fields = {"code": "PROMO_POPUP", "description": "A promotion covers the page",
+              "signal": InterruptionSignal.ELEMENT_VISIBLE, "locator": _css("div.overlay"),
+              "recovery": RecoveryAction.CLICK, "target": _css("div.overlay input[value='Close']")}
+    return KnownInterruption(**{**fields, **overrides})
+
+
+SESSION_EXPIRED = {"code": "SESSION_EXPIRED", "signal": InterruptionSignal.PAGE_TEXT, "locator": None,
+                   "text": "Your session has expired.", "recovery": RecoveryAction.START_OVER, "target": None}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({}, id="an overlay closed by a click"),
+        pytest.param(SESSION_EXPIRED, id="an expired session: start over"),
+        pytest.param({**SESSION_EXPIRED, "signal": InterruptionSignal.PAGE_PATH, "text": "/session-timeout"},
+                     id="spotted by its page"),
+        pytest.param({"recovery": RecoveryAction.WAIT, "target": None}, id="wait for it to go away"),
+    ],
+)
+def test_a_known_interruption_says_how_to_spot_it_and_what_to_do(overrides):
+    assert _interruption(**overrides).recovery in RecoveryAction
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"locator": None}, id="an element signal without its locator"),
+        pytest.param({"text": "Close"}, id="an element signal with text"),
+        pytest.param({**SESSION_EXPIRED, "text": None}, id="a text signal without its text"),
+        pytest.param({**SESSION_EXPIRED, "locator": _css("div.msg-error")}, id="a text signal with a locator"),
+        pytest.param({**SESSION_EXPIRED, "signal": InterruptionSignal.PAGE_PATH, "text": "session-timeout"},
+                     id="a path that is not a page pattern"),
+        pytest.param({**SESSION_EXPIRED, "text": "Session {member_id} expired"}, id="a placeholder in the text"),
+        pytest.param({"target": None}, id="a click without its target"),
+        pytest.param({**SESSION_EXPIRED, "target": _css("a")}, id="start over with a target"),
+        pytest.param({"target": _css("#close-{member_id}")}, id="a placeholder in a locator"),
+        pytest.param({"code": "promo_popup"}, id="code not in capitals"),
+    ],
+)
+def test_a_known_interruption_that_is_unclear_is_refused(overrides):
+    with pytest.raises(ValidationError):
+        _interruption(**overrides)
+
+
+def _check(**overrides) -> ConfirmationCheck:
+    fields = {"label": "Amount:", "input_key": "amount", "compare_as": CompareAs.MONEY, "currency": "USD"}
+    return ConfirmationCheck(**{**fields, **overrides})
+
+
+def _artifact_checking(*checks, interruptions=(), outcomes=()) -> Artifact:
+    return Artifact(
+        metadata=_valid_metadata(),
+        input_parameters=[InputParamDefinition(key="amount", type=ParamType.NUMBER, description="Amount"),
+                          InputParamDefinition(key="payee_name", type=ParamType.STRING, description="Payee")],
+        confirmation_checks=list(checks), known_interruptions=list(interruptions), known_outcomes=list(outcomes),
+        steps=[_valid_step()],
+    )
+
+
+def test_known_interruption_codes_are_unique_and_never_an_outcome_code():
+    with pytest.raises(ValidationError, match="unique"):
+        _artifact_checking(interruptions=[_interruption(), _interruption()])
+    with pytest.raises(ValidationError, match="both a known outcome and a known interruption"):
+        _artifact_checking(interruptions=[_interruption(code="MEMBER_NOT_FOUND")], outcomes=[_outcome()])
+
+
+def test_confirmation_checks_compare_text_and_money():
+    payee = _check(label="Payee:", input_key="payee_name", compare_as=CompareAs.TEXT, currency=None)
+    artifact = _artifact_checking(_check(), payee)
+    assert [check.compare_as for check in artifact.confirmation_checks] == [CompareAs.MONEY, CompareAs.TEXT]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"currency": None}, id="money without a currency"),
+        pytest.param({"compare_as": CompareAs.TEXT}, id="text with a currency"),
+        pytest.param({"label": "  "}, id="an empty label"),
+        pytest.param({"label": "Amount {amount}:"}, id="a placeholder in the label"),
+    ],
+)
+def test_a_confirmation_check_that_is_unclear_is_refused(overrides):
+    with pytest.raises(ValidationError):
+        _check(**overrides)
+
+
+@pytest.mark.parametrize(
+    "checks, message",
+    [
+        pytest.param([_check(input_key="fee")], "not a declared input", id="an input that doesn't exist"),
+        pytest.param([_check(input_key="payee_name")], "compares a number input", id="money against a text input"),
+        pytest.param([_check(compare_as=CompareAs.TEXT, currency=None)], "compares a string input",
+                     id="text against a number input"),
+        pytest.param([_check(), _check()], "unique", id="the same label twice"),
+    ],
+)
+def test_confirmation_checks_must_fit_the_contracts_inputs(checks, message):
+    with pytest.raises(ValidationError, match=message):
+        _artifact_checking(*checks)
+
+
 # --- versions ---
 
 def test_versions_compare_as_numbers_not_text():
@@ -728,6 +842,11 @@ def _set(path, value):
         pytest.param(_set(("known_outcomes",), [_outcome().model_dump(mode="json")]), Change.MAJOR,
                      id="a new known outcome"),
         pytest.param(_set(("allowed_paths",), ["/search"]), Change.MAJOR, id="the allowed pages"),
+        pytest.param(_set(("known_interruptions",), [_interruption().model_dump(mode="json")]), Change.MAJOR,
+                     id="a new known interruption"),
+        pytest.param(_set(("confirmation_checks",), [{"label": "Member ID:", "input_key": "member_id",
+                                                      "compare_as": "text", "currency": None}]),
+                     Change.MAJOR, id="a new confirmation check"),
     ],
 )
 def test_a_new_recording_is_a_change_of_the_largest_kind_it_contains(edit, expected):

@@ -78,6 +78,14 @@ SKIPPED_FIELDS: frozenset[Path] = frozenset({
     ("known_outcomes", "*", "code"),
     ("known_outcomes", "*", "signal"),
     ("known_outcomes", "*", "input_key"),
+    ("known_interruptions", "*", "code"),
+    ("known_interruptions", "*", "signal"),
+    ("known_interruptions", "*", "recovery"),
+    ("known_interruptions", "*", "locator", "type"),
+    ("known_interruptions", "*", "target", "type"),
+    ("confirmation_checks", "*", "input_key"),
+    ("confirmation_checks", "*", "compare_as"),
+    ("confirmation_checks", "*", "currency"),
     ("steps", "*", "step_id"),
     ("steps", "*", "action"),
     ("steps", "*", "safety_tier"),
@@ -127,6 +135,16 @@ def artifact_fields(artifact: Artifact) -> list[ScannedField]:
         add(("known_outcomes", position, "text"), FieldKind.CONTRACT, outcome.text)
     for position, pattern in enumerate(artifact.allowed_paths):
         add(("allowed_paths", position), FieldKind.CONTRACT, pattern)
+    for position, interruption in enumerate(artifact.known_interruptions):
+        at: Path = ("known_interruptions", position)
+        add((*at, "description"), FieldKind.CONTRACT, interruption.description)
+        add((*at, "text"), FieldKind.CONTRACT, interruption.text)
+        for name in ("locator", "target"):
+            locator = getattr(interruption, name)
+            if locator is not None:
+                add((*at, name, "value"), FieldKind.CONTRACT, locator.value)
+    for position, check in enumerate(artifact.confirmation_checks):
+        add(("confirmation_checks", position, "label"), FieldKind.CONTRACT, check.label)
 
     for position, step in enumerate(artifact.steps):
         at: Path = ("steps", position)
@@ -376,7 +394,8 @@ _SEVERITY = {
 _POSITION_SYNTAX = re.compile(r":nth-of-type\(\d+\)|\[\d+\]")
 
 _DEFINITION_WORDS = {"input_parameters": "input", "credentials": "credential", "output_definitions": "output",
-                     "known_outcomes": "known outcome"}
+                     "known_outcomes": "known outcome", "known_interruptions": "known interruption",
+                     "confirmation_checks": "confirmation check"}
 # Checks that hold text; a next-step check stores none, so it never reaches a message.
 _CHECK_WORDS = {
     CheckpointType.PAGE_PATH: "page path check",
@@ -509,11 +528,18 @@ def _where(field: ScannedField, artifact: Artifact) -> str:
         return f"final check {rest[0]}"
     if group == "allowed_paths":
         return f"allowed page {rest[0]}"
-    position, name = rest
+    position, *names = rest
     entry = getattr(artifact, str(group))[position]
-    # A known outcome is named by its code; every other definition by its key.
-    label = entry.code if group == "known_outcomes" else entry.key
-    return f"{_DEFINITION_WORDS[str(group)]} {label} {str(name).replace('_', ' ')}"
+    # Known answers and obstacles are named by their code, a confirmation check by its
+    # number, every other definition by its key.
+    if group in ("known_outcomes", "known_interruptions"):
+        label = entry.code
+    elif group == "confirmation_checks":
+        label = str(position + 1)
+    else:
+        label = entry.key
+    words = " ".join(str(name).replace("_", " ") for name in names)
+    return f"{_DEFINITION_WORDS[str(group)]} {label} {words}"
 
 
 def _step_part(field: ScannedField, step: Step) -> str:

@@ -7,7 +7,7 @@ import re
 from urllib.parse import urlparse
 from .placeholders import CREDENTIAL_PREFIX, find_placeholders, iter_placeholders
 from .routes import route_allowed, valid_route_pattern
-from .step_schema import ActionType, CheckpointType, Step
+from .step_schema import ActionType, CheckpointType, Locator, Step
 
 _SIMPLE_NAME = r"^[a-z][a-z0-9_]*$"
 _ADDRESS_SEGMENT_END = set("/\"'?#&")
@@ -84,6 +84,90 @@ class KnownOutcome(BaseModel):
                 raise ValueError(f"outcome {self.code}: the text is matched as written; placeholders are not allowed")
         elif self.input_key is None or self.text is not None:
             raise ValueError(f"outcome {self.code}: no_such_option needs the input_key, and no text")
+        return self
+
+
+class InterruptionSignal(str, Enum):
+    """How replay recognises a known interruption."""
+
+    # The page shows this phrase: the whole phrase, in any case, visible.
+    PAGE_TEXT = "page_text"
+    # The page's path matches this pattern ("/session-timeout").
+    PAGE_PATH = "page_path"
+    # This element is showing (an overlay covering the page).
+    ELEMENT_VISIBLE = "element_visible"
+
+
+class RecoveryAction(str, Enum):
+    """What replay does about a known interruption; nothing else is ever tried."""
+
+    # Click the stated element, such as a close button.
+    CLICK = "click"
+    # Run the artifact again from its first step (never after an irreversible step ran).
+    START_OVER = "start_over"
+    # Wait for it to go away, within the step's check timeout.
+    WAIT = "wait"
+
+
+class KnownInterruption(BaseModel):
+    """An obstacle replay clears by itself — a popup, an expired session — declared by the
+    engineer with one recovery, so replay never clicks anything nobody approved."""
+
+    code: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
+    description: str = Field(min_length=1)
+    signal: InterruptionSignal
+    # For page_text: the phrase; for page_path: a page pattern. Written as it is.
+    text: Optional[str] = None
+    # For element_visible: the element that shows the interruption is there.
+    locator: Optional[Locator] = None
+    recovery: RecoveryAction
+    # For a click recovery: what to click.
+    target: Optional[Locator] = None
+
+    @model_validator(mode="after")
+    def validate_signal_and_recovery(self) -> "KnownInterruption":
+        where = f"interruption {self.code}"
+        if self.signal == InterruptionSignal.ELEMENT_VISIBLE:
+            if self.locator is None or self.text is not None:
+                raise ValueError(f"{where}: element_visible needs its locator, and no text")
+        else:
+            if not (self.text and self.text.strip()) or self.locator is not None:
+                raise ValueError(f"{where}: {self.signal.value} needs its text, and no locator")
+            if find_placeholders(self.text):
+                raise ValueError(f"{where}: the text is matched as written; placeholders are not allowed")
+            if self.signal == InterruptionSignal.PAGE_PATH and not valid_route_pattern(self.text):
+                raise ValueError(f"{where}: page_path needs a page pattern such as /session-timeout")
+        if (self.recovery == RecoveryAction.CLICK) != (self.target is not None):
+            raise ValueError(f"{where}: a click recovery needs its target, and only a click has one")
+        for locator in (self.locator, self.target):
+            if locator is not None and find_placeholders(locator.value):
+                raise ValueError(f"{where}: its locators are written as they are; placeholders are not allowed")
+        return self
+
+
+class CompareAs(str, Enum):
+    # Word for word, ignoring only extra spaces; case matters.
+    TEXT = "text"
+    # Read exactly, to the cent, in the check's currency.
+    MONEY = "money"
+
+
+class ConfirmationCheck(BaseModel):
+    """Before an irreversible step, the value shown beside this label must equal this run's
+    input, or replay doesn't click and a person decides."""
+
+    label: str = Field(min_length=1)
+    input_key: str
+    compare_as: CompareAs
+    # ISO 4217 code for a money check, e.g. "USD"; nothing else has one.
+    currency: Optional[str] = Field(default=None, pattern=r"^[A-Z]{3}$")
+
+    @model_validator(mode="after")
+    def validate_label_and_currency(self) -> "ConfirmationCheck":
+        if not self.label.strip() or find_placeholders(self.label):
+            raise ValueError("a confirmation check's label is the page's own text, with no placeholders")
+        if (self.compare_as == CompareAs.MONEY) != (self.currency is not None):
+            raise ValueError("a money confirmation check needs a currency, and only a money check has one")
         return self
 
 
@@ -185,6 +269,14 @@ class Artifact(BaseModel):
         description="The pages this capability may visit on the bank's host, as path patterns "
         "('/member/*' is one segment); empty means any page on the host"
     )
+    known_interruptions: list[KnownInterruption] = Field(
+        default_factory=list,
+        description="Obstacles replay clears by itself, each with how to spot it and its one recovery"
+    )
+    confirmation_checks: list[ConfirmationCheck] = Field(
+        default_factory=list,
+        description="What must match this run's inputs on screen before any irreversible step"
+    )
     steps: list[Step] = Field(min_length=1)
     global_assertions: list[GlobalAssertion] = Field(
         default_factory=list,
@@ -242,6 +334,28 @@ class Artifact(BaseModel):
         start_path = urlparse(self.metadata.target_url).path or "/"
         if self.allowed_paths and not route_allowed(start_path, self.allowed_paths):
             raise ValueError("allowed_paths: the start page must be one of the allowed pages")
+        return self
+
+    @model_validator(mode="after")
+    def validate_interruptions_and_checks(self) -> "Artifact":
+        codes = [interruption.code for interruption in self.known_interruptions]
+        if len(codes) != len(set(codes)):
+            raise ValueError("known_interruptions codes must be unique")
+        shared = sorted(set(codes) & {outcome.code for outcome in self.known_outcomes})
+        if shared:
+            raise ValueError(f"{shared[0]} is both a known outcome and a known interruption")
+        labels = [check.label for check in self.confirmation_checks]
+        if len(labels) != len(set(labels)):
+            raise ValueError("confirmation_checks labels must be unique")
+        input_types = {p.key: p.type for p in self.input_parameters}
+        for position, check in enumerate(self.confirmation_checks, start=1):
+            if check.input_key not in input_types:
+                raise ValueError(f"confirmation check {position}: {check.input_key} is not a declared input")
+            # Money is compared with a number input, text with a text input.
+            wanted = ParamType.NUMBER if check.compare_as == CompareAs.MONEY else ParamType.STRING
+            if input_types[check.input_key] != wanted:
+                raise ValueError(f"confirmation check {position}: a {check.compare_as.value} check "
+                                 f"compares a {wanted.value} input")
         return self
 
     @model_validator(mode="after")

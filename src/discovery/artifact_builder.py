@@ -22,7 +22,9 @@ from src.types.artifact_schema import (
     Artifact,
     ArtifactMetadata,
     CredentialDefinition,
+    ConfirmationCheck,
     InputParamDefinition,
+    KnownInterruption,
     KnownOutcome,
     OutputParamDefinition,
 )
@@ -54,6 +56,10 @@ class ArtifactContract:
     known_outcomes: list[KnownOutcome] = field(default_factory=list)
     # The pages it may visit, as path patterns; empty means any page on the bank's host.
     allowed_paths: list[str] = field(default_factory=list)
+    # The obstacles replay clears by itself, and what must match on screen before any
+    # irreversible step.
+    known_interruptions: list[KnownInterruption] = field(default_factory=list)
+    confirmation_checks: list[ConfirmationCheck] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,8 @@ def build_and_save(
             credentials=list(contract.credentials),
             known_outcomes=list(contract.known_outcomes),
             allowed_paths=list(contract.allowed_paths),
+            known_interruptions=list(contract.known_interruptions),
+            confirmation_checks=list(contract.confirmation_checks),
             steps=list(steps),
         )
     except ValidationError as error:

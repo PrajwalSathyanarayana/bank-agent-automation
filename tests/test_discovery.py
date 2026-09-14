@@ -87,11 +87,16 @@ from src.types.artifact_schema import (
     GlobalAssertion,
     GlobalAssertionType,
     InputParamDefinition,
+    CompareAs,
+    ConfirmationCheck,
+    InterruptionSignal,
+    KnownInterruption,
     KnownOutcome,
     OutcomeSignal,
     OutputParamDefinition,
     OutputType,
     ParamType,
+    RecoveryAction,
 )
 from src.types.result_schema import ExecutionStatus, HandoffResolution
 from src.types.step_schema import ActionType, CheckpointType, Locator, LocatorType, SafetyTier, Step, StepCheckpoint
@@ -1938,6 +1943,42 @@ def test_the_allowed_pages_are_read_as_the_engineers_contract():
     assert FAKE_PASSWORD not in finding.message
 
 
+PROMO_POPUP = KnownInterruption(
+    code="PROMO_POPUP", description="A promotion covers the dashboard", signal=InterruptionSignal.ELEMENT_VISIBLE,
+    locator=Locator(type=LocatorType.CSS, value="div.overlay", priority=0), recovery=RecoveryAction.CLICK,
+    target=Locator(type=LocatorType.CSS, value="div.overlay input[value='Close']", priority=0))
+PAYMENT_CHECKS = [ConfirmationCheck(label="Payee:", input_key="payee_name", compare_as=CompareAs.TEXT),
+                  ConfirmationCheck(label="Amount:", input_key="amount", compare_as=CompareAs.MONEY, currency="USD")]
+
+
+def test_interruptions_and_confirmation_checks_are_read_as_the_engineers_contract():
+    artifact = _bs_artifact().model_copy(update={"known_interruptions": [PROMO_POPUP],
+                                                 "confirmation_checks": PAYMENT_CHECKS})
+    kinds = {"/".join(map(str, field.path)): field.kind for field in artifact_fields(artifact)}
+    assert {
+        "known_interruptions/0/description": FieldKind.CONTRACT,
+        "known_interruptions/0/locator/value": FieldKind.CONTRACT,
+        "known_interruptions/0/target/value": FieldKind.CONTRACT,
+        "confirmation_checks/0/label": FieldKind.CONTRACT,
+        "confirmation_checks/1/label": FieldKind.CONTRACT,
+    }.items() <= kinds.items()
+    skipped = ("/code", "/signal", "/recovery", "/input_key", "/compare_as", "/currency")
+    assert not [path for path in kinds if path.startswith(("known_interruptions", "confirmation_checks"))
+                and path.endswith(skipped)]
+
+
+def test_a_secret_in_an_interruptions_locator_stops_the_save_and_names_it():
+    inputs = _bs_inputs()
+    data = _bs_artifact().model_dump(mode="json")
+    popup = PROMO_POPUP.model_dump(mode="json")
+    popup["target"]["value"] = f"#{FAKE_PASSWORD}"
+    data["known_interruptions"] = [popup]
+    [finding] = find_problems(convert(Artifact.model_validate(data), inputs), inputs)
+    assert finding.code == AbortCode.SECRET_LITERAL
+    assert "known interruption PROMO_POPUP target value" in finding.message
+    assert FAKE_PASSWORD not in finding.message
+
+
 def test_a_secret_in_a_known_outcome_stops_the_save_and_names_the_outcome():
     inputs = _bs_inputs()
     data = _bs_artifact().model_dump(mode="json")
@@ -2255,6 +2296,15 @@ def test_a_contract_whose_start_page_is_not_allowed_is_not_saved(storage, run_lo
     assert result.error.code == "ARTIFACT_INVALID"
     assert "start page" in result.error.message
     assert not storage.exists()
+
+
+def test_the_contracts_interruptions_and_confirmation_checks_are_saved_and_signed(storage, run_logger):
+    contract = dataclasses.replace(_ab_contract(), known_interruptions=[PROMO_POPUP], confirmation_checks=PAYMENT_CHECKS)
+    result = build_and_save(contract, [_ab_start()], _bs_inputs(), run_logger)
+    assert result.error is None
+    saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
+    assert (saved.known_interruptions, saved.confirmation_checks) == ([PROMO_POPUP], PAYMENT_CHECKS)
+    verify(saved, env.artifact_signing_key)
 
 
 def _ab_recording(description="Enter member 10234", locator="#s1", extra_step=False, outcomes=()):
