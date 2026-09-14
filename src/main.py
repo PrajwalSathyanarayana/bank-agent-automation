@@ -22,6 +22,8 @@ from src.types.artifact_schema import (
     CredentialDefinition,
     CredentialKind,
     InputParamDefinition,
+    KnownOutcome,
+    OutcomeSignal,
     OutputParamDefinition,
     OutputType,
     ParamType,
@@ -44,14 +46,25 @@ CONTRACTS = {
             InputParamDefinition(key="payee_name", type=ParamType.STRING, description="Payee, as named in the payee list"),
         ],
         output_definitions=[
-            OutputParamDefinition(key="checking_balance_before", type=OutputType.STRING,
+            OutputParamDefinition(key="checking_balance_before", type=OutputType.MONEY, currency="USD",
                                   description="The member's checking balance as shown before paying"),
-            OutputParamDefinition(key="new_checking_balance", type=OutputType.STRING,
+            OutputParamDefinition(key="new_checking_balance", type=OutputType.MONEY, currency="USD",
                                   description="The checking balance shown on the receipt after paying"),
         ],
         credentials=[
             CredentialDefinition(key="bank_username", kind=CredentialKind.CONFIG, description="Teller username"),
             CredentialDefinition(key="bank_password", kind=CredentialKind.SECRET, description="Teller password"),
+        ],
+        # The answers other than a completed payment, each with the bank's own wording.
+        known_outcomes=[
+            KnownOutcome(code="MEMBER_NOT_FOUND", description="No member has this ID",
+                         signal=OutcomeSignal.PAGE_TEXT, text="No member found with that ID."),
+            KnownOutcome(code="INSUFFICIENT_FUNDS", description="The checking balance doesn't cover the amount",
+                         signal=OutcomeSignal.PAGE_TEXT, text="Insufficient funds for this payment amount."),
+            KnownOutcome(code="ACCOUNT_RESTRICTED", description="The paying account is restricted; Bill Pay is refused",
+                         signal=OutcomeSignal.PAGE_TEXT, text="the paying account is restricted"),
+            KnownOutcome(code="PAYEE_NOT_FOUND", description="The payee isn't in the payee list",
+                         signal=OutcomeSignal.NO_SUCH_OPTION, input_key="payee_name"),
         ],
     ),
 }
