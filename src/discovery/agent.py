@@ -6,7 +6,7 @@ The loop owns every control point: the step and time limits, the safety gate, wh
 recorded, and how the run ends. The model only ever chooses.
 """
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Protocol, Union
 
@@ -30,6 +30,7 @@ from src.discovery.browser import (
 )
 from src.discovery.locators import NoProvenLocator, RunValues, derive_locators
 from src.discovery.perception import Observation, PageElement, UnknownElement, observing
+from src.locating.checks import value_beside
 from src.locating.values import UnreadableValue, read_output
 from src.discovery.prompts import (
     ASSERT_FIRST,
@@ -46,6 +47,7 @@ from src.discovery.prompts import (
 from src.discovery.recorder import Action, AssertionRefused, ExtractionRefused, Recorder, TypingRefused
 from src.observability.logger import RunLogger
 from src.safety.allowlist import AllowlistViolation, check_domain, check_route, enforce_safety
+from src.safety.authorization import MISMATCH, authorize
 from src.safety.redactor import redact_text, scrub_known_values
 from src.safety.sandbox import sandbox_refusal
 from src.types.artifact_schema import CredentialKind, ParamType
@@ -222,6 +224,8 @@ class _Discovery:
         number_keys = {p.key for p in contract.input_parameters if p.type == ParamType.NUMBER}
         text_inputs = {key: str(value) for key, value in request.input_values.items() if key not in number_keys}
         number_inputs = {key: float(value) for key, value in request.input_values.items() if key in number_keys}
+        # The run's inputs as the caller gave them: what the payment check compares the screen with.
+        self._input_values = dict(request.input_values)
         config_keys = [c.key for c in contract.credentials if c.kind == CredentialKind.CONFIG]
         self._username_key = config_keys[0] if config_keys else ""
         self._run = RunValues(
@@ -444,6 +448,10 @@ class _Discovery:
             await self._recorder.commit(step, self._page, self._run, derived=derived, acted=False)
             return self._save(ExecutionStatus.HUMAN_ESCALATED)
         if irreversible:
+            refusal = await self._confirmation_refusal()
+            if refusal is not None:
+                # Not clicked and not recorded: the model can go back and put it right.
+                return _Next(refusal, call_id, is_error=True)
             # A test environment: the step is performed, so what follows it (the receipt,
             # values that exist only afterwards) is learned too. Its dialog is accepted.
             self._logger.irreversible_executed(step.sequence_index)
@@ -465,6 +473,26 @@ class _Discovery:
             self._asserted_here = False
         done = "Done: this irreversible step was performed (test environment)." if irreversible else "Done."
         return _Next(self._with_dialogs(done), call_id)
+
+    async def _confirmation_refusal(self) -> Optional[str]:
+        """Why the irreversible click must not happen, worded for the model; None if it may.
+
+        The same payment check replay makes, so a wrong label in the contract or a wrong
+        choice on the way is caught in discovery, not on the first real payment. The limit
+        guards real money and a sandbox has none: only a mismatch stops the click here.
+        """
+        checks = self._contract.confirmation_checks
+        if not checks:
+            return None
+        readings = {check.label: await value_beside(self._page, check.label) for check in checks}
+        result = authorize(checks, readings, self._input_values, env.auto_execute_limit, env.auto_execute_currency)
+        self._logger.authorization_checked(result.code, [asdict(problem) for problem in result.problems])
+        if result.code != MISMATCH:
+            return None
+        found = "; ".join(f'{problem.label} expected "{problem.expected}", seen "{problem.seen}"'
+                          for problem in result.problems)
+        return (f"Refused: the confirm screen doesn't match this run's request, so it was not confirmed: {found}. "
+                "Go back and correct it, or use report_stuck if the screen can't show it.")
 
     async def _perform(self, kind: ActionType, element: PageElement, value: Optional[str]) -> None:
         timeout_ms = action_timeout_ms(self._time_left_ms())

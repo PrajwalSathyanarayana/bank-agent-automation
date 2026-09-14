@@ -218,6 +218,11 @@ class RunLogger:
         """Discovery in a test environment performed an irreversible step, to learn what follows it."""
         self._emit("IRREVERSIBLE_EXECUTED", {"step_index": step_index, "environment": "sandbox"})
 
+    def authorization_checked(self, code: Optional[str], problems: list[dict[str, str]]) -> None:
+        """The payment check before an irreversible step: authorized, or its code and every
+        problem (label, expected, seen, reason). The values pass through the redaction chokepoint."""
+        self._emit("AUTHORIZATION_CHECKED", {"authorized": code is None, "code": code, "problems": problems})
+
     def dialog_dismissed(self, dialog_type: str, message: str) -> None:
         """A browser dialog nobody expected was dismissed: its type and wording.
 

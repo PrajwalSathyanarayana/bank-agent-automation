@@ -2622,10 +2622,10 @@ def discovery(mock_bank_url, storage, run_logger):
     base = dataclasses.replace(_ab_contract(), target_url=f"{mock_bank_url}/login")
     values = {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}
 
-    async def run(*replies, outputs=(), sandbox=False, allowed_paths=(), start="/login", **options):
+    async def run(*replies, outputs=(), sandbox=False, allowed_paths=(), start="/login", checks=(), **options):
         # The environment is set explicitly, so the .env setting never changes a test.
         contract = dataclasses.replace(base, target_url=f"{mock_bank_url}{start}", output_definitions=list(outputs),
-                                       allowed_paths=list(allowed_paths))
+                                       allowed_paths=list(allowed_paths), confirmation_checks=list(checks))
         request = DiscoveryRequest(contract, values)
         model = ScriptedModel(*replies)
         return await discover(request, model, run_logger, sandbox=sandbox, **options), model
@@ -3001,8 +3001,27 @@ async def test_a_start_page_redirected_off_the_allowed_pages_stops_the_run(disco
     assert model.received == []
 
 
-# Kept last in the file: this test really pays in the shared test bank, which changes the
-# member's balance for anything that runs after it in the same session.
+@pytest.mark.anyio
+async def test_a_confirm_screen_that_doesnt_match_the_request_is_not_confirmed(discovery, dashboard_popup, run_logger):
+    dashboard_popup(False)
+    wrong_payee = ("select_option", {"element": "dropdown", "option_label": "Desert Valley Water Utility",
+                                     "reason": "Choose the payee"})
+    # The payee choice is the eighth reply; Confirm Payment the twelfth, answered in the thirteenth message.
+    result, model = await discovery(*TO_CONFIRM_PAGE[:7], wrong_payee, *TO_CONFIRM_PAGE[8:], CONFIRM, STOP,
+                                    sandbox=True, checks=PAYMENT_CHECKS)
+    answer = model.received[12]["content"][0]
+    assert answer["is_error"] is True
+    assert answer["content"].startswith("Refused: the confirm screen doesn't match this run's request")
+    assert 'Payee: expected "Sunbelt Electric Co", seen "Desert Valley Water Utility"' in answer["content"]
+    lines = _log_lines(run_logger)
+    [check] = [line for line in lines if line["event_type"] == "AUTHORIZATION_CHECKED"]
+    assert (check["authorized"], check["code"]) == (False, "AUTHORIZATION_MISMATCH")
+    assert "IRREVERSIBLE_EXECUTED" not in [line["event_type"] for line in lines]
+    assert result.error.code == "STUCK_NO_PROGRESS"
+
+
+# Kept last in the file: these tests really pay in the shared test bank, which changes the
+# member's balance for anything that runs after them in the same session.
 NEW_BALANCE_OUTPUT = OutputParamDefinition(key="new_checking_balance", type=OutputType.STRING,
                                            description="Checking balance after paying")
 
@@ -3031,3 +3050,19 @@ async def test_in_a_sandbox_discovery_performs_the_irreversible_step_and_learns_
         ActionType.ASSERT_TEXT, ActionType.EXTRACT_TEXT]
     events = [line["event_type"] for line in _log_lines(run_logger)]
     assert "IRREVERSIBLE_EXECUTED" in events and "DIALOG_ACCEPTED" in events
+
+
+@pytest.mark.anyio
+async def test_in_a_sandbox_the_payment_is_confirmed_once_the_screen_matches_the_request(
+    discovery, dashboard_popup, run_logger
+):
+    dashboard_popup(False)
+    paid = ("assert_visible", {"expected_text": "Payment Submitted Successfully", "reason": "Check it went through"})
+    done = ("mark_goal_complete", {"summary": "Paid the bill"})
+    result, _ = await discovery(*TO_CONFIRM_PAGE, CONFIRM, paid, done, sandbox=True, checks=PAYMENT_CHECKS)
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    lines = _log_lines(run_logger)
+    [check] = [line for line in lines if line["event_type"] == "AUTHORIZATION_CHECKED"]
+    assert (check["authorized"], check["code"], check["problems"]) == (True, None, [])
+    events = [line["event_type"] for line in lines]
+    assert events.index("AUTHORIZATION_CHECKED") < events.index("IRREVERSIBLE_EXECUTED")
