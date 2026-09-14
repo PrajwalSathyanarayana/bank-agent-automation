@@ -171,9 +171,45 @@ class RunLogger:
         """Discovery: a model declined a turn and the fallback model answered it."""
         self._emit("MODEL_FALLBACK", {"from_model": from_model, "to_model": to_model})
 
+    def model_action(self, turn: int, tool: str, element: Optional[int], reason: str) -> None:
+        """Discovery: what the model chose this turn: the tool, the element number and its reason."""
+        self._emit("MODEL_ACTION", {"turn": turn, "tool": tool, "element": element, "reason": reason})
+
+    def action_refused(self, turn: int, tool: str, refusal: str) -> None:
+        """Discovery: the model's action was refused or failed; what it was told."""
+        self._emit("ACTION_REFUSED", {"turn": turn, "tool": tool, "refusal": refusal})
+
+    def model_usage(
+        self, turn: int, input_tokens: int, cache_write_tokens: int, cache_read_tokens: int, output_tokens: int
+    ) -> None:
+        """Discovery: the tokens one model call used (uncached input, cache writes, cache reads, output)."""
+        self._emit("MODEL_USAGE", {
+            "turn": turn, "input_tokens": input_tokens, "cache_write_tokens": cache_write_tokens,
+            "cache_read_tokens": cache_read_tokens, "output_tokens": output_tokens,
+        })
+
+    def run_usage(
+        self, input_tokens: int, cache_write_tokens: int, cache_read_tokens: int, output_tokens: int,
+        estimated_cost_usd: Optional[float],
+    ) -> None:
+        """Discovery: the run's token totals and its estimated cost at list price (None if unpriced)."""
+        self._emit("RUN_USAGE", {
+            "input_tokens": input_tokens, "cache_write_tokens": cache_write_tokens,
+            "cache_read_tokens": cache_read_tokens, "output_tokens": output_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+        })
+
     def execution_ended(self, status: str, error_code: Optional[str], error_message: Optional[str]) -> None:
         """How the run ended: its status and, for anything but success, the code and reason."""
         self._emit("EXECUTION_ENDED", {"status": status, "error_code": error_code, "error_message": error_message})
+
+    def dialog_accepted(self, dialog_type: str, message: str) -> None:
+        """A dialog the system expected (an irreversible step in a test environment) was accepted."""
+        self._emit("DIALOG_ACCEPTED", {"dialog_type": dialog_type, "dialog_message": message})
+
+    def irreversible_executed(self, step_index: int) -> None:
+        """Discovery in a test environment performed an irreversible step, to learn what follows it."""
+        self._emit("IRREVERSIBLE_EXECUTED", {"step_index": step_index, "environment": "sandbox"})
 
     def dialog_dismissed(self, dialog_type: str, message: str) -> None:
         """A browser dialog nobody expected was dismissed: its type and wording.
