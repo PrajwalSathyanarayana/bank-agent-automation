@@ -77,7 +77,7 @@ from src.locating.checks import element_wording, shows_phrase
 from src.locating.resolver import resolve
 from src.observability.logger import RunLogger
 from src.safety.classifier import classify
-from src.safety.integrity import sign, verify
+from src.safety.integrity import IntegrityCheckFailed, sign, verify
 from src.types.artifact_schema import (
     Artifact,
     ArtifactMetadata,
@@ -2193,6 +2193,37 @@ def test_an_invalid_recording_is_not_saved_and_its_message_shows_no_value(storag
     assert FAKE_PASSWORD not in result.error.message
     assert not storage.exists()
     assert _log_lines(run_logger) == []
+
+
+BILL_PAY_OUTCOMES = [
+    KnownOutcome(code="MEMBER_NOT_FOUND", description="No member has this ID",
+                 signal=OutcomeSignal.PAGE_TEXT, text="No member found with that ID."),
+    KnownOutcome(code="PAYEE_NOT_FOUND", description="The payee isn't in the list",
+                 signal=OutcomeSignal.NO_SUCH_OPTION, input_key="payee_name"),
+]
+
+
+def test_the_contracts_known_outcomes_are_saved_and_signed(storage, run_logger):
+    contract = dataclasses.replace(_ab_contract(), known_outcomes=BILL_PAY_OUTCOMES)
+    steps = [_ab_start(), _bs_step(1, ActionType.TYPE, "Enter member 10234", "10234")]
+    result = build_and_save(contract, steps, _bs_inputs(), run_logger)
+    assert result.error is None
+    saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
+    assert saved.known_outcomes == BILL_PAY_OUTCOMES
+    verify(saved, env.artifact_signing_key)
+    # The outcomes are part of what the signature covers: dropping one is detected.
+    with pytest.raises(IntegrityCheckFailed):
+        verify(saved.model_copy(update={"known_outcomes": BILL_PAY_OUTCOMES[1:]}), env.artifact_signing_key)
+
+
+def test_a_known_outcome_naming_an_undeclared_input_is_not_saved(storage, run_logger):
+    stray = KnownOutcome(code="PAYEE_NOT_FOUND", description="The payee isn't in the list",
+                         signal=OutcomeSignal.NO_SUCH_OPTION, input_key="payee")
+    contract = dataclasses.replace(_ab_contract(), known_outcomes=[stray])
+    result = build_and_save(contract, [_ab_start()], _bs_inputs(), run_logger)
+    assert result.error.code == "ARTIFACT_INVALID"
+    assert "payee is not a declared input" in result.error.message
+    assert not storage.exists()
 
 
 def test_a_recording_with_no_check_at_all_is_not_saved(storage, run_logger):

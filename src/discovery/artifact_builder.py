@@ -5,7 +5,7 @@ reason instead: an engineer fixes an invalid artifact, not a person at the brows
 """
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -22,6 +22,7 @@ from src.types.artifact_schema import (
     ArtifactMetadata,
     CredentialDefinition,
     InputParamDefinition,
+    KnownOutcome,
     OutputParamDefinition,
 )
 from src.types.result_schema import ErrorDetail
@@ -49,6 +50,8 @@ class ArtifactContract:
     input_parameters: list[InputParamDefinition]
     output_definitions: list[OutputParamDefinition]
     credentials: list[CredentialDefinition]
+    # The legitimate answers other than success; a capability may have none.
+    known_outcomes: list[KnownOutcome] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,7 @@ def build_and_save(
             input_parameters=list(contract.input_parameters),
             output_definitions=list(contract.output_definitions),
             credentials=list(contract.credentials),
+            known_outcomes=list(contract.known_outcomes),
             steps=list(steps),
         )
     except ValidationError as error:
