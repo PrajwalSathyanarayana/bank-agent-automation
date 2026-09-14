@@ -54,9 +54,10 @@ exactly as the page shows it, one that proves the page is in the expected state 
 heading, a status or confirmation message). The system checks that exactly one element \
 shows it; if not, the check is refused and you can quote a longer phrase.
 - Never assert a value that changes with the inputs or the account, such as a name, \
-an amount, a balance or a date. Read values the goal asks for with extract_text, \
-pointing at the element that holds just the value, not its label. On later runs the \
-same element is read again, so the value it returns may differ.
+an amount, a balance or a date. Read every value listed under "Values to read" with \
+extract_text before any final submission, by quoting the label shown right before the \
+value, for example the text in the table cell to its left. The label must appear only \
+once. On later runs the value beside the same label is read, so it may differ.
 - Before calling mark_goal_complete, assert the state that shows the goal is done, on \
 the current page.
 
@@ -82,6 +83,14 @@ ASSERT_FIRST = (
     "Before the goal can be marked complete, assert the state that shows it is done, "
     "on the current page, with assert_visible."
 )
+
+
+def outputs_first(unread: Sequence[str]) -> str:
+    """The reply when the run would end, or reach its final submission, with values unread."""
+    return (
+        f"Not yet: read {', '.join(unread)} with extract_text first. The run can't end or reach "
+        "its final submission until every value listed under Values to read has been read."
+    )
 
 
 def allowlist_refusal(first: bool) -> str:
@@ -141,8 +150,11 @@ def tool_definitions(output_keys: Sequence[str]) -> list[dict[str, Any]]:
     if output_keys:
         tools.insert(3, _tool(
             "extract_text",
-            "Read an element's text as one of the values the goal asks for.",
-            {"element": _ELEMENT, "output_key": {"type": "string", "enum": list(output_keys)}, "reason": _REASON},
+            "Read the value shown right after a label, such as the table cell to the right of it, "
+            "into one of the values the goal asks for. Quote the label, not the value.",
+            {"label": {"type": "string", "description": "The label shown right before the value, exactly as the page shows it."},
+             "output_key": {"type": "string", "enum": list(output_keys)},
+             "reason": _REASON},
         ))
     return tools
 
@@ -167,7 +179,7 @@ def goal_message(
             kind = "secret: password boxes only" if credential.kind == CredentialKind.SECRET else "not secret"
             lines.append(f"- {{{CREDENTIAL_PREFIX}:{credential.key}}} ({credential.description}; {kind})")
     if outputs:
-        lines += ["", "Values to read with extract_text:"]
+        lines += ["", "Values to read with extract_text, before any final submission:"]
         lines += [f"- {output.key} ({output.description})" for output in outputs]
     lines += ["", "The start page is open."]
     return "\n".join(lines)
