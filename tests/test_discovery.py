@@ -2226,6 +2226,51 @@ def test_a_known_outcome_naming_an_undeclared_input_is_not_saved(storage, run_lo
     assert not storage.exists()
 
 
+def _ab_recording(description="Enter member 10234", extra_step=False, outcomes=()):
+    # A contract and its recording; the defaults make the same recording every time.
+    steps = [_ab_start(), _bs_step(1, ActionType.TYPE, description, "10234")]
+    if extra_step:
+        steps.append(_bs_step(2, ActionType.ASSERT_TEXT, "Check the amount", "Amount: $50.00"))
+    return dataclasses.replace(_ab_contract(), known_outcomes=list(outcomes)), steps
+
+
+def test_a_rediscovery_with_nothing_changed_writes_no_new_version(storage, run_logger):
+    first = build_and_save(*_ab_recording(), _bs_inputs(), run_logger)
+    again = build_and_save(*_ab_recording(), _bs_inputs(), run_logger)
+    assert (again.path, again.artifact.metadata.version) == (first.path, "1.0.0")
+    assert list(first.path.parent.iterdir()) == [first.path]
+    last = _log_lines(run_logger)[-1]
+    assert (last["event_type"], last["artifact_id"], last["version"]) == (
+        "ARTIFACT_UNCHANGED", first.artifact.metadata.artifact_id, "1.0.0")
+
+
+@pytest.mark.parametrize(
+    "changes, expected",
+    [
+        pytest.param({"description": "Type member 10234"}, "1.0.1", id="wording only: patch"),
+        pytest.param({"extra_step": True}, "1.1.0", id="an extra step: minor"),
+        pytest.param({"outcomes": BILL_PAY_OUTCOMES}, "2.0.0", id="a new known outcome: major"),
+    ],
+)
+def test_a_rediscovery_gets_the_next_version_for_what_changed(storage, run_logger, changes, expected):
+    first = build_and_save(*_ab_recording(), _bs_inputs(), run_logger)
+    again = build_and_save(*_ab_recording(**changes), _bs_inputs(), run_logger)
+    assert again.artifact.metadata.version == expected
+    assert again.path.name == f"{again.artifact.metadata.artifact_id}_v{expected}.json"
+    verify(Artifact.model_validate_json(again.path.read_text(encoding="utf-8")), env.artifact_signing_key)
+    assert sorted(path.name for path in again.path.parent.iterdir()) == sorted([first.path.name, again.path.name])
+
+
+def test_a_latest_version_that_fails_its_signature_is_numbered_past_with_a_major_bump(storage, run_logger):
+    first = build_and_save(*_ab_recording(), _bs_inputs(), run_logger)
+    data = json.loads(first.path.read_text(encoding="utf-8"))
+    data["metadata"]["description"] = "Changed by hand."
+    first.path.write_text(json.dumps(data), encoding="utf-8")
+    # The same recording again: it isn't compared with a file that can't be trusted.
+    again = build_and_save(*_ab_recording(), _bs_inputs(), run_logger)
+    assert again.artifact.metadata.version == "2.0.0"
+
+
 def test_a_recording_with_no_check_at_all_is_not_saved(storage, run_logger):
     steps = [_bs_step(0, ActionType.NAVIGATE, "Open the start page"), _bs_step(1, ActionType.CLICK, "Go")]
     result = build_and_save(_ab_contract(), steps, _bs_inputs(), run_logger)

@@ -17,6 +17,7 @@ from src.config.settings import settings
 from src.discovery.backstop import ScanInputs, scan_artifact
 from src.observability.logger import RunLogger
 from src.safety.integrity import sign
+from src.storage.artifacts import SavedArtifact, latest_saved
 from src.types.artifact_schema import (
     Artifact,
     ArtifactMetadata,
@@ -27,9 +28,8 @@ from src.types.artifact_schema import (
 )
 from src.types.result_schema import ErrorDetail
 from src.types.step_schema import Step
+from src.types.versioning import FIRST_VERSION, Change, Version, bump, change_between, version_text
 
-# Every discovery saves a new artifact at the first version; later versions come from edits.
-FIRST_VERSION = "1.0.0"
 INVALID_CODE = "ARTIFACT_INVALID"
 # The capability names a folder, so it must be a plain name that can't leave the store.
 _FOLDER_NAME = re.compile(r"[a-z][a-z0-9_]*")
@@ -78,7 +78,8 @@ def build_and_save(
             metadata=ArtifactMetadata(
                 capability=contract.capability,
                 description=contract.description,
-                version=FIRST_VERSION,
+                # Provisional: the real version is chosen after the scan, against the latest.
+                version=version_text(FIRST_VERSION),
                 target_url=contract.target_url,
                 created_timestamp=now,
                 last_updated_timestamp=now,
@@ -102,7 +103,15 @@ def build_and_save(
     if scanned.error is not None:
         return BuildResult(error=scanned.error)
 
-    signed = sign(scanned.artifact, env.artifact_signing_key)
+    latest = latest_saved(contract.capability)
+    version = _next_version(latest, scanned.artifact)
+    if version is None:
+        # The same capability, flow and details as the latest version: no new file.
+        existing = latest.artifact.metadata
+        logger.artifact_unchanged(existing.artifact_id, existing.version)
+        return BuildResult(artifact=latest.artifact, path=latest.path)
+    numbered = scanned.artifact.metadata.model_copy(update={"version": version_text(version)})
+    signed = sign(scanned.artifact.model_copy(update={"metadata": numbered}), env.artifact_signing_key)
     path = write_artifact(signed)
     logger.artifact_saved(signed.metadata.artifact_id, signed.metadata.version, signed.metadata.integrity_hash)
     return BuildResult(artifact=signed, path=path)
@@ -126,6 +135,22 @@ def write_artifact(artifact: Artifact) -> Path:
     temporary.write_text(artifact.model_dump_json(indent=2), encoding="utf-8")
     os.replace(temporary, path)
     return path
+
+
+def _next_version(latest: Optional[SavedArtifact], candidate: Artifact) -> Optional[Version]:
+    """The version this save gets, or None when it would be identical to the latest.
+
+    The first save is 1.0.0. After that, the latest version is bumped by the largest kind
+    of change: major for the contract, minor for the flow, patch for details. A latest
+    version that can't be trusted is no basis for comparison, but its number stays taken:
+    the save gets the next major version.
+    """
+    if latest is None:
+        return FIRST_VERSION
+    if not latest.trusted or latest.artifact is None:
+        return bump(latest.version, Change.MAJOR)
+    change = change_between(latest.artifact, candidate)
+    return None if change == Change.NONE else bump(latest.version, change)
 
 
 def _has_a_check(artifact: Artifact) -> bool:

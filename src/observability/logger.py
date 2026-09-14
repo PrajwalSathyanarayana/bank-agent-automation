@@ -116,6 +116,10 @@ class RunLogger:
             {"artifact_id": artifact_id, "version": version, "sha256_hash": sha256_hash},
         )
 
+    def artifact_unchanged(self, artifact_id: str, version: str) -> None:
+        """A rediscovery recorded exactly the latest saved version: no new file was written."""
+        self._emit("ARTIFACT_UNCHANGED", {"artifact_id": artifact_id, "version": version})
+
     def step_recorded(
         self,
         index: int,
