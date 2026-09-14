@@ -25,6 +25,14 @@ from src.discovery.browser import (
     select_option,
     type_text,
 )
+from src.discovery.prompts import (
+    STUCK_CATEGORIES,
+    SYSTEM_PROMPT,
+    goal_message,
+    page_blocks,
+    progress,
+    tool_definitions,
+)
 from src.discovery.locators import (
     Candidate,
     NoProvenLocator,
@@ -2248,3 +2256,54 @@ async def test_the_session_opens_an_allowed_start_page_and_refuses_another(mock_
         with pytest.raises(AllowlistViolation):
             await session.open("https://example.com/", timeout_ms=1_000)
         assert session.page.url.endswith("/login")
+
+
+# --- prompts: what the model reads ---
+
+@pytest.mark.parametrize("word", ["bill pay", "payee", "member", "dashboard", "confirm payment", "localhost",
+                                  "popup", "teller", "admin"])
+def test_the_system_prompt_says_nothing_about_this_bank(word):
+    # The same prompt must work on any app, so discovery is real and nothing is scripted.
+    assert word not in SYSTEM_PROMPT.lower()
+
+
+def test_every_tool_has_a_strict_schema_and_every_action_needs_a_reason():
+    tools = {tool["name"]: tool for tool in tool_definitions(["checking_balance"])}
+    assert set(tools) == {"click", "type_text", "select_option", "extract_text", "dismiss_overlay",
+                          "assert_visible", "mark_goal_complete", "report_stuck"}
+    for tool in tools.values():
+        schema = tool["input_schema"]
+        assert tool["strict"] is True
+        assert schema["additionalProperties"] is False
+        assert schema["required"] == list(schema["properties"])
+    for name in ("click", "type_text", "select_option", "extract_text", "dismiss_overlay", "assert_visible"):
+        assert "reason" in tools[name]["input_schema"]["required"]
+    assert "element" not in tools["assert_visible"]["input_schema"]["properties"]
+    assert tools["extract_text"]["input_schema"]["properties"]["output_key"]["enum"] == ["checking_balance"]
+    assert tools["report_stuck"]["input_schema"]["properties"]["category"]["enum"] == list(STUCK_CATEGORIES)
+
+
+def test_extract_text_is_offered_only_when_outputs_are_declared():
+    assert "extract_text" not in {tool["name"] for tool in tool_definitions([])}
+
+
+def test_the_goal_message_gives_placeholders_and_values_but_credentials_by_name_only():
+    contract = _ab_contract([OutputParamDefinition(key="checking_balance", type=ParamType.STRING,
+                                                   description="Checking balance before paying")])
+    text = goal_message("For member 10234, pay 50 to Sunbelt Electric Co.", contract.input_parameters,
+                        {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"},
+                        contract.credentials, contract.output_definitions)
+    assert text.startswith("Goal: For member 10234, pay 50 to Sunbelt Electric Co.")
+    assert '{member_id} = "10234"' in text and '{amount} = "50"' in text
+    assert "{credential:bank_password} (Teller password; secret: password boxes only)" in text
+    assert "checking_balance (Checking balance before paying)" in text
+    assert env.mock_bank_username not in text
+    assert env.mock_bank_password.get_secret_value() not in text
+
+
+def test_progress_and_page_blocks_are_packaged_for_the_model():
+    assert progress(3, 40, 12 * 60_000) == "Step 3 of 40, about 12 minutes left."
+    assert progress(40, 40, 50_000) == "Step 40 of 40, about 1 minute left."
+    image, elements = page_blocks(b"\x89PNG fake", "[1] link \"Home\"")
+    assert (image["type"], image["source"]["media_type"]) == ("image", "image/png")
+    assert elements == {"type": "text", "text": "Elements you can act on:\n[1] link \"Home\""}
