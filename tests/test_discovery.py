@@ -27,6 +27,7 @@ from src.discovery.locators import (
     scan,
 )
 from src.discovery import backstop
+from src.discovery.artifact_builder import ArtifactContract, UnsignedArtifact, build_and_save, write_artifact
 from src.discovery.backstop import (
     AbortCode,
     FieldKind,
@@ -44,6 +45,7 @@ from src.locating.checks import element_wording, shows_phrase
 from src.locating.resolver import resolve
 from src.observability.logger import RunLogger
 from src.safety.classifier import classify
+from src.safety.integrity import sign, verify
 from src.types.artifact_schema import (
     Artifact,
     ArtifactMetadata,
@@ -52,6 +54,7 @@ from src.types.artifact_schema import (
     GlobalAssertion,
     GlobalAssertionType,
     InputParamDefinition,
+    OutputParamDefinition,
     ParamType,
 )
 from src.types.step_schema import ActionType, CheckpointType, Locator, LocatorType, SafetyTier, Step, StepCheckpoint
@@ -2063,3 +2066,90 @@ def test_a_stopped_save_logs_every_finding_and_never_a_value_that_stopped_it(run
     logged = run_logger.log_path.read_text(encoding="utf-8")
     assert FAKE_PASSWORD not in logged
     assert "Member 10234" not in logged
+
+
+# --- artifact builder: validate, scan, sign, write ---
+
+@pytest.fixture
+def storage(tmp_path, monkeypatch):
+    # Each test saves into its own temporary store, never the project's artifacts folder.
+    folder = tmp_path / "artifacts"
+    monkeypatch.setattr(settings, "artifact_storage_dir", folder)
+    return folder
+
+
+def _ab_contract(outputs=()) -> ArtifactContract:
+    # The same contract the backstop tests use, taken from their artifact.
+    template = _bs_artifact()
+    return ArtifactContract(
+        capability=template.metadata.capability,
+        description=template.metadata.description,
+        target_url=template.metadata.target_url,
+        input_parameters=template.input_parameters,
+        output_definitions=list(outputs),
+        credentials=template.credentials,
+    )
+
+
+def _ab_start() -> Step:
+    return _bs_step(0, ActionType.NAVIGATE, "Open the start page",
+                    checkpoints=[_bs_check(CheckpointType.PAGE_PATH, "/login")])
+
+
+def test_a_clean_recording_is_saved_signed_and_logged(storage, run_logger):
+    steps = [_ab_start(),
+             _bs_step(1, ActionType.TYPE, "Enter member 10234", "10234"),
+             _bs_step(2, ActionType.ASSERT_TEXT, "Check the amount", "Amount: $50.00")]
+    result = build_and_save(_ab_contract(), steps, _bs_inputs(), run_logger)
+    assert result.error is None
+    metadata = result.artifact.metadata
+    assert result.path == storage / "member_servicing_and_bill_pay" / f"{metadata.artifact_id}_v1.0.0.json"
+    saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
+    verify(saved, env.artifact_signing_key)
+    assert (saved.steps[1].input_value, saved.steps[2].input_value) == ("{member_id}", "Amount: ${amount}")
+    lines = _log_lines(run_logger)
+    assert [line["event_type"] for line in lines] == ["BACKSTOP_SCAN", "ARTIFACT_SAVED"]
+    assert lines[1]["sha256_hash"] == metadata.integrity_hash
+    assert [file.name for file in result.path.parent.iterdir()] == [result.path.name]
+
+
+def test_an_invalid_recording_is_not_saved_and_its_message_shows_no_value(storage, run_logger):
+    # A declared output no step reads, and a secret typed as a literal that must not be echoed.
+    steps = [_ab_start(), _bs_step(1, ActionType.TYPE, "Type it", FAKE_PASSWORD)]
+    outputs = [OutputParamDefinition(key="checking_balance", type=ParamType.STRING, description="Balance")]
+    result = build_and_save(_ab_contract(outputs), steps, _bs_inputs(), run_logger)
+    assert result.error.code == "ARTIFACT_INVALID"
+    assert "checking_balance" in result.error.message
+    assert FAKE_PASSWORD not in result.error.message
+    assert not storage.exists()
+    assert _log_lines(run_logger) == []
+
+
+def test_a_recording_with_no_check_at_all_is_not_saved(storage, run_logger):
+    steps = [_bs_step(0, ActionType.NAVIGATE, "Open the start page"), _bs_step(1, ActionType.CLICK, "Go")]
+    result = build_and_save(_ab_contract(), steps, _bs_inputs(), run_logger)
+    assert (result.error.code, result.artifact) == ("ARTIFACT_INVALID", None)
+    assert "no checkpoint" in result.error.message
+    assert not storage.exists()
+
+
+def test_a_backstop_finding_stops_the_save_after_logging_the_report(storage, run_logger):
+    steps = [_ab_start(), _bs_step(1, ActionType.TYPE, "Type it", FAKE_PASSWORD)]
+    result = build_and_save(_ab_contract(), steps, _bs_inputs(), run_logger)
+    assert (result.error.code, result.path) == ("SECRET_LITERAL", None)
+    assert not storage.exists()
+    assert [line["event_type"] for line in _log_lines(run_logger)] == ["BACKSTOP_SCAN"]
+
+
+def test_an_unsigned_artifact_is_never_written(storage):
+    with pytest.raises(UnsignedArtifact):
+        write_artifact(_bs_artifact())
+    assert not storage.exists()
+
+
+def test_a_capability_that_is_not_a_simple_name_is_never_used_as_a_folder(storage):
+    artifact = _bs_artifact()
+    escaping = artifact.model_copy(update={"metadata": artifact.metadata.model_copy(update={"capability": "../escape"})})
+    with pytest.raises(ValueError, match="simple lowercase name"):
+        write_artifact(sign(escaping, env.artifact_signing_key))
+    assert not storage.exists()
