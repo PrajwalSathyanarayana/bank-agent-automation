@@ -12,6 +12,7 @@ from src.safety.allowlist import (
     AllowlistViolation,
     check_action_type,
     check_domain,
+    check_route,
     enforce_safety,
 )
 from src.safety.classifier import SafetyEscalation, classify, verify_tier
@@ -86,6 +87,36 @@ def test_enforce_safety_raises_on_action_violation_even_if_domain_allowed():
 
 def test_enforce_safety_passes_when_both_checks_satisfied():
     enforce_safety(f"{env.mock_bank_base_url}/dashboard", ActionType.CLICK)  # should not raise
+
+
+PAGES = ["/login", "/member/*", "/billpay"]
+
+
+@pytest.mark.parametrize(
+    "path, allowed",
+    [
+        pytest.param("/member/10234", True, id="a listed pattern"),
+        pytest.param("/billpay?payee=P001#top", True, id="query and fragment ignored"),
+        pytest.param("/member/10234/edit", False, id="a page not listed"),
+        pytest.param("", False, id="no path is the root, which isn't listed"),
+    ],
+)
+def test_check_route_allows_only_the_capabilitys_pages(path, allowed):
+    url = f"{env.mock_bank_base_url}{path}"
+    if allowed:
+        check_route(url, PAGES)  # should not raise
+    else:
+        with pytest.raises(AllowlistViolation, match="not one this capability may visit"):
+            check_route(url, PAGES)
+
+
+def test_an_empty_page_list_allows_any_page_on_the_host():
+    check_route(f"{env.mock_bank_base_url}/member/10234/edit", [])  # should not raise
+
+
+def test_enforce_safety_raises_on_a_page_not_allowed_even_on_the_right_domain():
+    with pytest.raises(AllowlistViolation, match="'/member/10234/edit'"):
+        enforce_safety(f"{env.mock_bank_base_url}/member/10234/edit", ActionType.CLICK, allowed_paths=PAGES)
 
 
 # --- classifier.py ---

@@ -29,6 +29,7 @@ from src.discovery.browser import (
 )
 from src.discovery.prompts import (
     ASSERT_FIRST,
+    allowlist_refusal,
     NO_ACTION_REPROMPT,
     STUCK_CATEGORIES,
     SYSTEM_PROMPT,
@@ -2566,9 +2567,11 @@ def discovery(mock_bank_url, storage, run_logger):
     base = dataclasses.replace(_ab_contract(), target_url=f"{mock_bank_url}/login")
     values = {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}
 
-    async def run(*replies, outputs=(), sandbox=False, **options):
+    async def run(*replies, outputs=(), sandbox=False, allowed_paths=(), start="/login", **options):
         # The environment is set explicitly, so the .env setting never changes a test.
-        request = DiscoveryRequest(dataclasses.replace(base, output_definitions=list(outputs)), values)
+        contract = dataclasses.replace(base, target_url=f"{mock_bank_url}{start}", output_definitions=list(outputs),
+                                       allowed_paths=list(allowed_paths))
+        request = DiscoveryRequest(contract, values)
         model = ScriptedModel(*replies)
         return await discover(request, model, run_logger, sandbox=sandbox, **options), model
 
@@ -2884,6 +2887,54 @@ async def test_a_production_run_is_not_held_to_this_machine(monkeypatch, run_log
     request = DiscoveryRequest(dataclasses.replace(_ab_contract(), target_url=REMOTE_BANK), RUN_VALUES)
     with pytest.raises(_BrowserReached):
         await discover(request, ScriptedModel(), run_logger, sandbox=False)
+
+
+BILL_PAY_PAGES = ["/login", "/dashboard", "/search", "/member/*", "/member/*/accounts", "/billpay", "/billpay/confirm"]
+EDIT_PROFILE = ("click", {"element": 'link "Edit Profile"', "reason": "Open the profile editor"})
+
+
+def _recorded_reasons(run_logger) -> list[str]:
+    return [line["description"] for line in _log_lines(run_logger) if line["event_type"] == "STEP_RECORDED"]
+
+
+@pytest.mark.anyio
+async def test_the_flow_runs_within_its_allowed_pages(discovery, dashboard_popup):
+    dashboard_popup(False)
+    result, _ = await discovery(*TO_CONFIRM_PAGE, CONFIRM, allowed_paths=BILL_PAY_PAGES)
+    assert result.status == ExecutionStatus.HUMAN_ESCALATED, result.error
+
+
+@pytest.mark.anyio
+async def test_a_link_to_a_page_not_allowed_is_refused_before_the_click(discovery, dashboard_popup, run_logger):
+    dashboard_popup(False)
+    # On the member's page, twice: the first is refused and not clicked, the second ends the run.
+    result, model = await discovery(*TO_CONFIRM_PAGE[:6], EDIT_PROFILE, EDIT_PROFILE, allowed_paths=BILL_PAY_PAGES)
+    answer = model.received[7]["content"][0]
+    assert (answer["is_error"], answer["content"]) == (True, allowlist_refusal(first=True))
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "ALLOWLIST_VIOLATION")
+    assert "Open the profile editor" not in _recorded_reasons(run_logger)
+
+
+@pytest.mark.anyio
+async def test_an_action_landing_on_a_page_not_allowed_is_undone_and_not_recorded(
+    discovery, dashboard_popup, run_logger
+):
+    dashboard_popup(False)
+    # The search form lands on the member's page, which this list leaves out.
+    result, model = await discovery(*TO_CONFIRM_PAGE[:6], STOP, allowed_paths=["/login", "/dashboard", "/search"])
+    answer = model.received[6]["content"][0]
+    assert (answer["is_error"], answer["content"]) == (True, allowlist_refusal(first=True))
+    assert "Search" not in _recorded_reasons(run_logger)
+    assert result.error.code == "STUCK_NO_PROGRESS"
+
+
+@pytest.mark.anyio
+async def test_a_start_page_redirected_off_the_allowed_pages_stops_the_run(discovery):
+    # Signed out, the dashboard sends the browser to the session-timeout page.
+    result, model = await discovery(STOP, start="/dashboard", allowed_paths=["/dashboard"])
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "ALLOWLIST_VIOLATION")
+    assert "/session-timeout" in result.error.message
+    assert model.received == []
 
 
 # Kept last in the file: this test really pays in the shared test bank, which changes the

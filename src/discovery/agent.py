@@ -45,7 +45,7 @@ from src.discovery.prompts import (
 )
 from src.discovery.recorder import Action, AssertionRefused, ExtractionRefused, Recorder, TypingRefused
 from src.observability.logger import RunLogger
-from src.safety.allowlist import AllowlistViolation, check_domain, enforce_safety
+from src.safety.allowlist import AllowlistViolation, check_domain, check_route, enforce_safety
 from src.safety.redactor import redact_text, scrub_known_values
 from src.safety.sandbox import sandbox_refusal
 from src.types.artifact_schema import CredentialKind, ParamType
@@ -268,7 +268,10 @@ class _Discovery:
             async with BrowserSession(self._logger, headless=self._headless) as session:
                 self._session = session
                 try:
+                    check_route(self._contract.target_url, self._contract.allowed_paths)
                     await session.open(self._contract.target_url, timeout_ms=action_timeout_ms(self._time_left_ms()))
+                    # The bank may redirect the start page elsewhere: where it landed counts.
+                    check_route(session.page.url, self._contract.allowed_paths)
                 except AllowlistViolation as violation:
                     return self._end(ExecutionStatus.HARD_ABORT, "ALLOWLIST_VIOLATION", str(violation))
                 start = self._recorder.draft_start(session.page.url)
@@ -387,7 +390,7 @@ class _Discovery:
             drafted = await self._recorder.draft_extraction(
                 args["label"], args["output_key"], args["reason"], self._page, self._run
             )
-            enforce_safety(self._page.url, drafted.step.action)
+            enforce_safety(self._page.url, drafted.step.action, allowed_paths=self._contract.allowed_paths)
         except ExtractionRefused as refused:
             return _Next(f"Refused: {refused}.", call_id, is_error=True)
         except AllowlistViolation:
@@ -421,10 +424,12 @@ class _Discovery:
         action = Action(kind, args["reason"], value=value, output_key=args.get("output_key"))
         try:
             step = await self._recorder.draft_step(action, element.handle, derived, self._page.url, run=self._run)
-            enforce_safety(self._page.url, step.action)
+            enforce_safety(self._page.url, step.action, allowed_paths=self._contract.allowed_paths)
         except TypingRefused as refused:
             return _Next(f"Refused: {refused}.", call_id, is_error=True)
         except AllowlistViolation:
+            return self._violation(call_id)
+        if kind == ActionType.CLICK and await self._leads_off_the_allowlist(element):
             return self._violation(call_id)
 
         if name == "dismiss_overlay":
@@ -538,11 +543,18 @@ class _Discovery:
         return [output.key for output in self._contract.output_definitions if output.key not in self._outputs]
 
     def _on_allowlist(self) -> bool:
+        return _allowed(self._page.url, self._contract.allowed_paths)
+
+    async def _leads_off_the_allowlist(self, element: PageElement) -> bool:
+        # A link's destination is known before the click, so it is refused there rather than
+        # visited and undone. Anything else is judged by where it lands, after the action.
         try:
-            check_domain(self._page.url)
-        except AllowlistViolation:
+            destination = await element.handle.evaluate("element => element.tagName === 'A' ? element.href : ''")
+        except PlaywrightError:
             return False
-        return True
+        if not destination.startswith(("http://", "https://")):
+            return False  # no link, "#", or a script link: nothing to judge before the click
+        return not _allowed(destination, self._contract.allowed_paths)
 
     def _with_dialogs(self, text: str) -> str:
         dialogs = self._session.dialogs[self._dialogs_seen:]
@@ -582,6 +594,16 @@ class _Discovery:
 
     def _time_left_ms(self) -> int:
         return int(settings.discovery_timeout_ms - (time.monotonic() - self._started) * 1000)
+
+
+def _allowed(url: str, allowed_paths: list[str]) -> bool:
+    # The bank's host, and one of the capability's pages when it declared any.
+    try:
+        check_domain(url)
+        check_route(url, allowed_paths)
+    except AllowlistViolation:
+        return False
+    return True
 
 
 def _first_line(error: Exception) -> str:
