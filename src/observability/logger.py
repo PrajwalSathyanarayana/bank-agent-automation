@@ -84,10 +84,16 @@ class RunLogger:
     def step_fetched(self, step_id: str, index: int, action: str) -> None:
         self._emit("STEP_FETCHED", {"step_id": step_id, "index": index, "action": action})
 
-    def locator_evaluated(self, strategy: str, duration_ms: int, attempt: int) -> None:
+    def locator_evaluated(
+        self, strategy: str, duration_ms: int, attempt: int, *,
+        step_index: Optional[int] = None, priority: Optional[int] = None, matches: Optional[int] = None,
+    ) -> None:
+        """Replay tried one locator: its kind and priority, and how many elements it matched on
+        which attempt (None: it couldn't be used at all)."""
         self._emit(
             "LOCATOR_EVALUATED",
-            {"strategy": strategy, "duration_ms": duration_ms, "attempt": attempt},
+            {"strategy": strategy, "duration_ms": duration_ms, "attempt": attempt,
+             "step_index": step_index, "priority": priority, "matches": matches},
         )
 
     def step_executed(self, step_id: str, status: str) -> None:
