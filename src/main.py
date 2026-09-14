@@ -19,15 +19,21 @@ from src.discovery.agent import ClaudeModel, DiscoveryRequest, discover
 from src.discovery.artifact_builder import ArtifactContract
 from src.observability.logger import RunLogger
 from src.types.artifact_schema import (
+    CompareAs,
+    ConfirmationCheck,
     CredentialDefinition,
     CredentialKind,
     InputParamDefinition,
+    InterruptionSignal,
+    KnownInterruption,
     KnownOutcome,
     OutcomeSignal,
     OutputParamDefinition,
     OutputType,
     ParamType,
+    RecoveryAction,
 )
+from src.types.step_schema import Locator, LocatorType
 from src.types.result_schema import ExecutionStatus
 
 BILL_PAY = "member_servicing_and_bill_pay"
@@ -70,6 +76,23 @@ CONTRACTS = {
         # profile edit page (/member/<id>/edit) changes member data and is left out on purpose.
         allowed_paths=["/", "/login", "/dashboard", "/search", "/member/*", "/member/*/accounts",
                        "/billpay", "/billpay/confirm", "/session-timeout"],
+        # The obstacles replay clears by itself, each with the one recovery a person approved.
+        known_interruptions=[
+            KnownInterruption(code="PROMO_POPUP", description="A promotion covers the dashboard; its Close button hides it",
+                              signal=InterruptionSignal.ELEMENT_VISIBLE,
+                              locator=Locator(type=LocatorType.CSS, value="div.overlay", priority=0),
+                              recovery=RecoveryAction.CLICK,
+                              target=Locator(type=LocatorType.CSS, value="div.overlay input[value='Close']", priority=0)),
+            KnownInterruption(code="SESSION_EXPIRED",
+                              description="The session expired; the bank forgot the member and any pending payment",
+                              signal=InterruptionSignal.PAGE_TEXT, text="Your session has expired.",
+                              recovery=RecoveryAction.START_OVER),
+        ],
+        # Before Confirm Payment, the screen must show exactly this run's payee and amount.
+        confirmation_checks=[
+            ConfirmationCheck(label="Payee:", input_key="payee_name", compare_as=CompareAs.TEXT),
+            ConfirmationCheck(label="Amount:", input_key="amount", compare_as=CompareAs.MONEY, currency="USD"),
+        ],
     ),
 }
 

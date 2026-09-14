@@ -1,5 +1,6 @@
 import html
 import re
+from decimal import Decimal
 from urllib.parse import urlparse
 
 import pytest
@@ -7,9 +8,11 @@ import pytest
 from app import create_app  # the mock bank; tests/conftest.py puts its folder on the import path
 from src.config.env import env
 from src.config.settings import settings
-from src.locating.checks import phrase_matches
+from src.locating.checks import find_phrase, phrase_matches, value_beside
+from src.locating.resolver import resolve
 from src.main import BILL_PAY, CONTRACTS, parse_args
-from src.types.artifact_schema import OutcomeSignal, OutputType
+from src.safety.authorization import authorize
+from src.types.artifact_schema import CompareAs, OutcomeSignal, OutputType, RecoveryAction
 from src.types.routes import route_allowed
 
 
@@ -113,3 +116,62 @@ def test_the_discover_command_reads_typed_inputs_a_step_limit_and_a_window_optio
 def test_the_step_limit_defaults_to_the_setting_and_the_window_stays_hidden():
     args = parse_args(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"])
     assert (args.max_steps, args.headed) == (None, False)
+
+
+# --- the bill pay interruptions and payment checks, tried on the real pages ---
+
+def test_the_bill_pay_contract_declares_its_interruptions_and_payment_checks():
+    contract = CONTRACTS[BILL_PAY]
+    assert [(interruption.code, interruption.recovery) for interruption in contract.known_interruptions] == [
+        ("PROMO_POPUP", RecoveryAction.CLICK), ("SESSION_EXPIRED", RecoveryAction.START_OVER)]
+    assert [(check.label, check.input_key, check.compare_as) for check in contract.confirmation_checks] == [
+        ("Payee:", "payee_name", CompareAs.TEXT), ("Amount:", "amount", CompareAs.MONEY)]
+
+
+def _interruption(code):
+    return next(interruption for interruption in CONTRACTS[BILL_PAY].known_interruptions if interruption.code == code)
+
+
+async def _sign_in(page) -> None:
+    await page.goto("/login")
+    await page.fill("input[name='username']", env.mock_bank_username)
+    await page.fill("input[name='password']", env.mock_bank_password.get_secret_value())
+    await page.click("input[type='submit']")
+    await page.wait_for_url("**/dashboard")
+
+
+@pytest.mark.anyio
+async def test_the_promo_popup_is_spotted_and_its_declared_click_clears_it(page, dashboard_popup):
+    dashboard_popup(True)
+    await _sign_in(page)
+    popup = _interruption("PROMO_POPUP")
+    assert await resolve(page, popup.locator, {}).is_visible()
+    await resolve(page, popup.target, {}).click()
+    assert not await resolve(page, popup.locator, {}).is_visible()
+
+
+@pytest.mark.anyio
+async def test_an_expired_session_shows_the_declared_text_once(page):
+    # Signed out, the dashboard sends the browser to the session-timeout page.
+    await page.goto("/dashboard")
+    assert len(await find_phrase(page, _interruption("SESSION_EXPIRED").text)) == 1
+
+
+@pytest.mark.anyio
+async def test_the_confirm_screen_shows_each_declared_check_and_the_request_passes(page, dashboard_popup):
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/search")
+    await page.fill("input[name='member_id']", "10234")
+    await page.click("input[value='Search']")
+    await page.goto("/billpay")
+    await page.select_option("select[name='payee_id']", label="Sunbelt Electric Co")
+    await page.fill("input[name='amount']", "50.00")
+    await page.click("input[value='Continue']")
+    await page.wait_for_url("**/billpay/confirm")
+
+    checks = CONTRACTS[BILL_PAY].confirmation_checks
+    readings = {check.label: await value_beside(page, check.label) for check in checks}
+    assert readings == {"Payee:": "Sunbelt Electric Co", "Amount:": "$50.00"}
+    asked = {"member_id": "10234", "payee_name": "Sunbelt Electric Co", "amount": 50.0}
+    assert authorize(checks, readings, asked, Decimal("1000.00"), "USD").authorized
