@@ -163,6 +163,18 @@ class RunLogger:
         """
         self._emit("SECRET_ON_PAGE", {"step_index": step_index, "secrets": secrets, "found_in": found_in})
 
+    def overlay_dismissed(self, reason: str) -> None:
+        """Discovery: the model closed an overlay. The click is deliberately not a step."""
+        self._emit("OVERLAY_DISMISSED", {"reason": reason})
+
+    def model_fallback(self, from_model: str, to_model: str) -> None:
+        """Discovery: a model declined a turn and the fallback model answered it."""
+        self._emit("MODEL_FALLBACK", {"from_model": from_model, "to_model": to_model})
+
+    def execution_ended(self, status: str, error_code: Optional[str], error_message: Optional[str]) -> None:
+        """How the run ended: its status and, for anything but success, the code and reason."""
+        self._emit("EXECUTION_ENDED", {"status": status, "error_code": error_code, "error_message": error_message})
+
     def dialog_dismissed(self, dialog_type: str, message: str) -> None:
         """A browser dialog nobody expected was dismissed: its type and wording.
 

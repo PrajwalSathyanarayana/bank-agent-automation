@@ -1,6 +1,8 @@
 import asyncio
 import dataclasses
 import json
+import re
+from types import SimpleNamespace
 import math
 import struct
 from datetime import datetime, timezone
@@ -26,6 +28,8 @@ from src.discovery.browser import (
     type_text,
 )
 from src.discovery.prompts import (
+    ASSERT_FIRST,
+    NO_ACTION_REPROMPT,
     STUCK_CATEGORIES,
     SYSTEM_PROMPT,
     goal_message,
@@ -47,6 +51,7 @@ from src.discovery.locators import (
     scan,
 )
 from src.discovery import backstop
+from src.discovery.agent import DiscoveryRequest, ModelCallFailed, ModelReply, discover
 from src.discovery.artifact_builder import ArtifactContract, UnsignedArtifact, build_and_save, write_artifact
 from src.discovery.backstop import (
     AbortCode,
@@ -77,6 +82,7 @@ from src.types.artifact_schema import (
     OutputParamDefinition,
     ParamType,
 )
+from src.types.result_schema import ExecutionStatus, HandoffResolution
 from src.types.step_schema import ActionType, CheckpointType, Locator, LocatorType, SafetyTier, Step, StepCheckpoint
 from src.discovery.perception import (
     _COLLECTOR_SOURCE,
@@ -2307,3 +2313,177 @@ def test_progress_and_page_blocks_are_packaged_for_the_model():
     image, elements = page_blocks(b"\x89PNG fake", "[1] link \"Home\"")
     assert (image["type"], image["source"]["media_type"]) == ("image", "image/png")
     assert elements == {"type": "text", "text": "Elements you can act on:\n[1] link \"Home\""}
+
+
+# --- agent: the discovery loop, driven by a scripted model (no API calls) ---
+
+class ScriptedModel:
+    """Plays a fixed list of replies. An element is named by the start of its description
+    in the list the loop just sent, so a script survives renumbering."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.received = []
+
+    async def reply(self, messages, tools, *, timeout_s):
+        self.received.append(messages[-1])
+        entry = self.replies.pop(0)
+        if isinstance(entry, Exception):
+            raise entry
+        if entry == "text":
+            return ModelReply("end_turn", [SimpleNamespace(type="text", text="Let me look at this page first.")])
+        if entry == "refusal":
+            return ModelReply("refusal", [])
+        name, args = entry
+        args = dict(args)
+        if isinstance(args.get("element"), str):
+            args["element"] = _element_number(messages[-1], args["element"])
+        call = SimpleNamespace(type="tool_use", id=f"call_{len(self.received)}", name=name, input=args)
+        return ModelReply("tool_use", [call])
+
+
+def _texts(message) -> list[str]:
+    texts = []
+    for block in message["content"]:
+        if block["type"] == "text":
+            texts.append(block["text"])
+        elif block["type"] == "tool_result":
+            texts += [part["text"] for part in block["content"] if part["type"] == "text"]
+    return texts
+
+
+def _element_number(message, description_start) -> int:
+    for text in _texts(message):
+        for line in text.splitlines():
+            found = re.match(r"\[(\d+)\] (.*)", line)
+            if found and found.group(2).startswith(description_start):
+                return int(found.group(1))
+    raise AssertionError(f"no element starting with {description_start!r} in the list sent to the model")
+
+
+SIGN_IN = [
+    ("type_text", {"element": 'text box, left label "Username:"', "text": "{credential:bank_username}",
+                   "reason": "Enter the username"}),
+    ("type_text", {"element": "password box", "text": "{credential:bank_password}", "reason": "Enter the password"}),
+    ("click", {"element": 'button "Log In"', "reason": "Sign in"}),
+]
+NOTICE_CHECK = ("assert_visible", {"expected_text": "authorized personnel only", "reason": "Check the sign-on notice"})
+STOP = ("report_stuck", {"category": "NO_PROGRESS", "detail": "Stopping the test here"})
+
+
+@pytest.fixture
+def discovery(mock_bank_url, storage, run_logger):
+    # The real loop, browser and mock bank; only the model is scripted.
+    contract = dataclasses.replace(_ab_contract(), target_url=f"{mock_bank_url}/login")
+    request = DiscoveryRequest(contract, {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"})
+
+    async def run(*replies):
+        model = ScriptedModel(*replies)
+        return await discover(request, model, run_logger), model
+
+    return run
+
+
+@pytest.mark.anyio
+async def test_discovery_records_the_flow_and_stops_before_the_irreversible_step(
+    discovery, dashboard_popup, storage, run_logger
+):
+    dashboard_popup(False)
+    result, model = await discovery(
+        *SIGN_IN,
+        ("click", {"element": 'link "Member Search"', "reason": "Open member search"}),
+        ("type_text", {"element": 'text box, left label "Member ID:"', "text": "{member_id}", "reason": "Enter the member"}),
+        ("click", {"element": 'button "Search"', "reason": "Search"}),
+        ("click", {"element": 'link "Bill Pay"', "reason": "Open Bill Pay"}),
+        ("select_option", {"element": "dropdown", "option_label": "{payee_name}", "reason": "Choose the payee"}),
+        ("type_text", {"element": 'text box, left label "Amount:"', "text": "{amount}", "reason": "Enter the amount"}),
+        ("click", {"element": 'button "Continue"', "reason": "Continue to confirmation"}),
+        ("assert_visible", {"expected_text": "Amount:", "reason": "Check the confirmation page"}),
+        ("click", {"element": 'button "Confirm Payment"', "reason": "Submit it"}),
+    )
+    assert result.status == ExecutionStatus.HUMAN_ESCALATED, result.error
+    handoff = result.handoff_events[0]
+    assert (handoff.trigger_reason, handoff.resolution) == ("IRREVERSIBLE_STEP", HandoffResolution.ABORTED)
+    assert model.replies == []
+    [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
+    artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
+    verify(artifact, env.artifact_signing_key)
+    assert len(artifact.steps) == 13
+    assert artifact.steps[-1].safety_tier == SafetyTier.IRREVERSIBLE
+    assert [step.input_value for step in artifact.steps if step.action == ActionType.TYPE] == [
+        "{credential:bank_username}", "{credential:bank_password}", "{member_id}", "{amount}"]
+    events = [line["event_type"] for line in _log_lines(run_logger)]
+    assert events[0] == "EXECUTION_STARTED" and events[-2:] == ["EXECUTION_ENDED", "SUMMARY_METRICS"]
+    assert env.mock_bank_password.get_secret_value() not in run_logger.log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_mark_goal_complete_needs_a_passing_assertion_first(discovery, storage):
+    done = ("mark_goal_complete", {"summary": "Checked the sign-on page"})
+    result, model = await discovery(done, NOTICE_CHECK, done)
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    answer = model.received[1]["content"][0]
+    assert (answer["is_error"], answer["content"][0]["text"]) == (True, ASSERT_FIRST)
+    assert len(list((storage / "member_servicing_and_bill_pay").iterdir())) == 1
+
+
+@pytest.mark.anyio
+async def test_the_step_limit_ends_the_run_without_an_artifact(discovery, storage, monkeypatch):
+    monkeypatch.setattr(settings, "discovery_max_steps", 2)
+    result, _ = await discovery(NOTICE_CHECK, NOTICE_CHECK)
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "MAX_STEPS")
+    assert not storage.exists()
+
+
+@pytest.mark.anyio
+async def test_two_replies_without_an_action_end_the_run_as_stuck(discovery):
+    result, model = await discovery("text", "text")
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "STUCK_NO_PROGRESS")
+    assert _texts(model.received[1])[0] == NO_ACTION_REPROMPT
+
+
+@pytest.mark.anyio
+async def test_a_refusal_ends_the_run_at_once(discovery):
+    result, _ = await discovery("refusal")
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "MODEL_REFUSED")
+
+
+@pytest.mark.anyio
+async def test_report_stuck_ends_the_run_with_its_category(discovery):
+    result, _ = await discovery(("report_stuck", {"category": "ERROR_SHOWN", "detail": "The page shows an error"}))
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "STUCK_ERROR_SHOWN")
+    assert "The page shows an error" in result.error.message
+
+
+@pytest.mark.anyio
+async def test_a_failed_model_call_is_retried_once(discovery):
+    result, model = await discovery(ModelCallFailed("APITimeoutError"), STOP)
+    assert result.error.code == "STUCK_NO_PROGRESS"
+    assert len(model.received) == 2
+
+
+@pytest.mark.anyio
+async def test_two_failed_model_calls_end_the_run_as_a_technical_failure(discovery):
+    result, _ = await discovery(ModelCallFailed("APITimeoutError"), ModelCallFailed("APITimeoutError"))
+    assert (result.status, result.error.code) == (ExecutionStatus.TECHNICAL_FAIL, "MODEL_UNAVAILABLE")
+
+
+@pytest.mark.anyio
+async def test_an_overlay_is_closed_but_never_recorded(discovery, dashboard_popup, run_logger):
+    dashboard_popup(True)
+    await discovery(*SIGN_IN,
+                    ("dismiss_overlay", {"element": 'button "Close"', "reason": "Close the notice covering the page"}),
+                    STOP)
+    events = [line["event_type"] for line in _log_lines(run_logger)]
+    assert events.count("OVERLAY_DISMISSED") == 1
+    assert events.count("STEP_RECORDED") == 4  # the start page and the three sign-in steps
+
+
+@pytest.mark.anyio
+async def test_a_refused_action_is_told_to_the_model_and_the_run_goes_on(discovery):
+    result, model = await discovery(
+        ("type_text", {"element": "password box", "text": "guess123", "reason": "Enter the password"}), STOP)
+    answer = model.received[1]["content"][0]
+    assert answer["is_error"] is True
+    assert "password box only takes a secret reference" in answer["content"][0]["text"]
+    assert result.error.code == "STUCK_NO_PROGRESS"
