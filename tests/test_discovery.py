@@ -51,7 +51,7 @@ from src.discovery.locators import (
     scan,
 )
 from src.discovery import backstop
-from src.discovery.agent import DiscoveryRequest, ModelCallFailed, ModelReply, discover
+from src.discovery.agent import DiscoveryRequest, ModelCallFailed, ModelReply, discover, estimated_cost_usd
 from src.discovery.artifact_builder import ArtifactContract, UnsignedArtifact, build_and_save, write_artifact
 from src.discovery.backstop import (
     AbortCode,
@@ -65,7 +65,14 @@ from src.discovery.backstop import (
     flag_assertions,
     scan_artifact,
 )
-from src.discovery.recorder import Action, AssertionRefused, Recorder, RecordingError, TypingRefused
+from src.discovery.recorder import (
+    Action,
+    AssertionRefused,
+    ExtractionRefused,
+    Recorder,
+    RecordingError,
+    TypingRefused,
+)
 from src.locating.checks import element_wording, shows_phrase
 from src.locating.resolver import resolve
 from src.observability.logger import RunLogger
@@ -2253,6 +2260,17 @@ async def test_a_dialog_nobody_expected_is_dismissed_and_noted(page, run_logger)
 
 
 @pytest.mark.anyio
+async def test_a_dialog_is_accepted_only_while_the_system_expects_one(page, run_logger):
+    expecting = {"now": False}
+    notes = dismiss_dialogs(page, run_logger, accept_now=lambda: expecting["now"])
+    assert await asyncio.wait_for(page.evaluate("confirm('Leave this page?')"), timeout=10) is False
+    expecting["now"] = True
+    assert await asyncio.wait_for(page.evaluate("confirm('Submit this payment?')"), timeout=10) is True
+    assert notes == ["confirm: Leave this page?", "confirm (accepted): Submit this payment?"]
+    assert [line["event_type"] for line in _log_lines(run_logger)] == ["DIALOG_DISMISSED", "DIALOG_ACCEPTED"]
+
+
+@pytest.mark.anyio
 async def test_the_session_opens_an_allowed_start_page_and_refuses_another(mock_bank_url, run_logger):
     async with BrowserSession(run_logger) as session:
         await session.open(f"{mock_bank_url}/login", timeout_ms=10_000)
@@ -2285,6 +2303,8 @@ def test_every_tool_has_a_strict_schema_and_every_action_needs_a_reason():
     for name in ("click", "type_text", "select_option", "extract_text", "dismiss_overlay", "assert_visible"):
         assert "reason" in tools[name]["input_schema"]["required"]
     assert "element" not in tools["assert_visible"]["input_schema"]["properties"]
+    assert "element" not in tools["extract_text"]["input_schema"]["properties"]
+    assert "label" in tools["extract_text"]["input_schema"]["required"]
     assert tools["extract_text"]["input_schema"]["properties"]["output_key"]["enum"] == ["checking_balance"]
     assert tools["report_stuck"]["input_schema"]["properties"]["category"]["enum"] == list(STUCK_CATEGORIES)
 
@@ -2331,15 +2351,19 @@ class ScriptedModel:
         if isinstance(entry, Exception):
             raise entry
         if entry == "text":
-            return ModelReply("end_turn", [SimpleNamespace(type="text", text="Let me look at this page first.")])
+            return ModelReply("end_turn", [SimpleNamespace(type="text", text="Let me look at this page first.")],
+                              SCRIPTED_USAGE)
         if entry == "refusal":
-            return ModelReply("refusal", [])
+            return ModelReply("refusal", [], SCRIPTED_USAGE)
         name, args = entry
         args = dict(args)
         if isinstance(args.get("element"), str):
             args["element"] = _element_number(messages[-1], args["element"])
         call = SimpleNamespace(type="tool_use", id=f"call_{len(self.received)}", name=name, input=args)
-        return ModelReply("tool_use", [call])
+        return ModelReply("tool_use", [call], SCRIPTED_USAGE)
+
+
+SCRIPTED_USAGE = {"input_tokens": 1_200, "cache_write_tokens": 300, "cache_read_tokens": 0, "output_tokens": 80}
 
 
 def _texts(message) -> list[str]:
@@ -2348,7 +2372,7 @@ def _texts(message) -> list[str]:
         if block["type"] == "text":
             texts.append(block["text"])
         elif block["type"] == "tool_result":
-            texts += [part["text"] for part in block["content"] if part["type"] == "text"]
+            texts.append(block["content"])
     return texts
 
 
@@ -2369,17 +2393,33 @@ SIGN_IN = [
 ]
 NOTICE_CHECK = ("assert_visible", {"expected_text": "authorized personnel only", "reason": "Check the sign-on notice"})
 STOP = ("report_stuck", {"category": "NO_PROGRESS", "detail": "Stopping the test here"})
+TO_CONFIRM_PAGE = [
+    *SIGN_IN,
+    ("click", {"element": 'link "Member Search"', "reason": "Open member search"}),
+    ("type_text", {"element": 'text box, left label "Member ID:"', "text": "{member_id}", "reason": "Enter the member"}),
+    ("click", {"element": 'button "Search"', "reason": "Search"}),
+    ("click", {"element": 'link "Bill Pay"', "reason": "Open Bill Pay"}),
+    ("select_option", {"element": "dropdown", "option_label": "{payee_name}", "reason": "Choose the payee"}),
+    ("type_text", {"element": 'text box, left label "Amount:"', "text": "{amount}", "reason": "Enter the amount"}),
+    ("click", {"element": 'button "Continue"', "reason": "Continue to confirmation"}),
+    ("assert_visible", {"expected_text": "Amount:", "reason": "Check the confirmation page"}),
+]
+CONFIRM = ("click", {"element": 'button "Confirm Payment"', "reason": "Submit it"})
+BALANCE_OUTPUT = OutputParamDefinition(key="checking_balance_before", type=ParamType.STRING,
+                                       description="Checking balance before paying")
 
 
 @pytest.fixture
 def discovery(mock_bank_url, storage, run_logger):
     # The real loop, browser and mock bank; only the model is scripted.
-    contract = dataclasses.replace(_ab_contract(), target_url=f"{mock_bank_url}/login")
-    request = DiscoveryRequest(contract, {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"})
+    base = dataclasses.replace(_ab_contract(), target_url=f"{mock_bank_url}/login")
+    values = {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}
 
-    async def run(*replies):
+    async def run(*replies, outputs=(), sandbox=False, **options):
+        # The environment is set explicitly, so the .env setting never changes a test.
+        request = DiscoveryRequest(dataclasses.replace(base, output_definitions=list(outputs)), values)
         model = ScriptedModel(*replies)
-        return await discover(request, model, run_logger), model
+        return await discover(request, model, run_logger, sandbox=sandbox, **options), model
 
     return run
 
@@ -2389,18 +2429,7 @@ async def test_discovery_records_the_flow_and_stops_before_the_irreversible_step
     discovery, dashboard_popup, storage, run_logger
 ):
     dashboard_popup(False)
-    result, model = await discovery(
-        *SIGN_IN,
-        ("click", {"element": 'link "Member Search"', "reason": "Open member search"}),
-        ("type_text", {"element": 'text box, left label "Member ID:"', "text": "{member_id}", "reason": "Enter the member"}),
-        ("click", {"element": 'button "Search"', "reason": "Search"}),
-        ("click", {"element": 'link "Bill Pay"', "reason": "Open Bill Pay"}),
-        ("select_option", {"element": "dropdown", "option_label": "{payee_name}", "reason": "Choose the payee"}),
-        ("type_text", {"element": 'text box, left label "Amount:"', "text": "{amount}", "reason": "Enter the amount"}),
-        ("click", {"element": 'button "Continue"', "reason": "Continue to confirmation"}),
-        ("assert_visible", {"expected_text": "Amount:", "reason": "Check the confirmation page"}),
-        ("click", {"element": 'button "Confirm Payment"', "reason": "Submit it"}),
-    )
+    result, model = await discovery(*TO_CONFIRM_PAGE, CONFIRM)
     assert result.status == ExecutionStatus.HUMAN_ESCALATED, result.error
     handoff = result.handoff_events[0]
     assert (handoff.trigger_reason, handoff.resolution) == ("IRREVERSIBLE_STEP", HandoffResolution.ABORTED)
@@ -2423,7 +2452,7 @@ async def test_mark_goal_complete_needs_a_passing_assertion_first(discovery, sto
     result, model = await discovery(done, NOTICE_CHECK, done)
     assert result.status == ExecutionStatus.SUCCESS, result.error
     answer = model.received[1]["content"][0]
-    assert (answer["is_error"], answer["content"][0]["text"]) == (True, ASSERT_FIRST)
+    assert (answer["is_error"], answer["content"]) == (True, ASSERT_FIRST)
     assert len(list((storage / "member_servicing_and_bill_pay").iterdir())) == 1
 
 
@@ -2485,5 +2514,166 @@ async def test_a_refused_action_is_told_to_the_model_and_the_run_goes_on(discove
         ("type_text", {"element": "password box", "text": "guess123", "reason": "Enter the password"}), STOP)
     answer = model.received[1]["content"][0]
     assert answer["is_error"] is True
-    assert "password box only takes a secret reference" in answer["content"][0]["text"]
+    assert "password box only takes a secret reference" in answer["content"]
     assert result.error.code == "STUCK_NO_PROGRESS"
+
+
+@pytest.mark.anyio
+async def test_a_tool_result_holds_only_text_and_the_new_page_follows_it(discovery, run_logger):
+    # The second real run ended in HTTP 400 at the first error result, which carried the
+    # screenshot inside it; the page now travels beside the result, and the refusal is logged.
+    await discovery(("type_text", {"element": "password box", "text": "guess123", "reason": "Enter the password"}), STOP)
+    lines = _log_lines(run_logger)
+    [refused] = [line for line in lines if line["event_type"] == "ACTION_REFUSED"]
+    assert (refused["turn"], refused["tool"]) == (1, "type_text")
+    decisions = [(line["turn"], line["tool"]) for line in lines if line["event_type"] == "MODEL_ACTION"]
+    assert decisions == [(1, "type_text"), (2, "report_stuck")]
+
+
+@pytest.mark.anyio
+async def test_the_page_travels_beside_the_tool_result_not_inside_it(discovery):
+    _, model = await discovery(NOTICE_CHECK, STOP)
+    message = model.received[1]["content"]
+    assert message[0]["type"] == "tool_result" and isinstance(message[0]["content"], str)
+    assert [block["type"] for block in message[1:]] == ["image", "text", "text"]
+
+
+def test_the_estimated_cost_uses_list_prices_with_cheap_cache_reads():
+    nothing = dict.fromkeys(["input_tokens", "cache_write_tokens", "cache_read_tokens", "output_tokens"], 0)
+    assert estimated_cost_usd("claude-opus-5", {**nothing, "input_tokens": 1_000_000}) == 5.0
+    assert estimated_cost_usd("claude-opus-5", {**nothing, "cache_write_tokens": 1_000_000}) == 6.25
+    assert estimated_cost_usd("claude-opus-5", {**nothing, "cache_read_tokens": 1_000_000}) == 0.5
+    assert estimated_cost_usd("claude-opus-5", {**nothing, "output_tokens": 1_000_000}) == 25.0
+    assert estimated_cost_usd("an-unpriced-model", {**nothing, "input_tokens": 1_000_000}) is None
+
+
+@pytest.mark.anyio
+async def test_each_model_call_logs_its_tokens_and_the_run_logs_the_totals(discovery, run_logger):
+    await discovery(NOTICE_CHECK, STOP)
+    lines = _log_lines(run_logger)
+    per_call = [line for line in lines if line["event_type"] == "MODEL_USAGE"]
+    [total] = [line for line in lines if line["event_type"] == "RUN_USAGE"]
+    assert [line["turn"] for line in per_call] == [1, 2]
+    assert (total["input_tokens"], total["output_tokens"]) == (2 * 1_200, 2 * 80)
+
+
+EXTRACT_PAGE = ('<table><tr><td>Name:</td><td>Laura Whitfield</td></tr>'
+                '<tr><td>Primary Account Balance:</td><td>$2,450.32</td></tr></table>')
+
+
+@pytest.mark.anyio
+async def test_a_value_is_read_by_its_label_and_its_locator_holds_for_another_record(page, recorder):
+    await _start_on_html(recorder, page, EXTRACT_PAGE)
+    drafted = await recorder.draft_extraction("Primary Account Balance:", "checking_balance_before",
+                                              "Read the balance", page, _bank_run())
+    assert drafted.value == "$2,450.32"
+    assert (drafted.step.action, drafted.step.output_key) == (ActionType.EXTRACT_TEXT, "checking_balance_before")
+    first = drafted.step.locators[0]
+    assert (first.type, drafted.derived.kinds[0]) == (LocatorType.XPATH, "label")
+    assert all("2,450.32" not in locator.value for locator in drafted.step.locators)
+    # Another member's page: the label-anchored locator reads that member's value.
+    await page.set_content(f"{QUIRKS_DOCTYPE}<html><body>{EXTRACT_PAGE.replace('$2,450.32', '$15,200.45')}</body></html>")
+    assert await resolve(page, first, {}).inner_text() == "$15,200.45"
+
+
+REFUSED_READING_PAGE = ('<table><tr><td>Last Login:</td></tr></table><p>Notes:</p>'
+                        '<div>Status:</div><div>Status:</div>')
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "label, message",
+    [
+        pytest.param("  ", "quote the label", id="empty"),
+        pytest.param("Missing", "no visible element shows", id="not shown"),
+        pytest.param("Status:", "shown by 2 elements", id="shown twice"),
+        pytest.param("Last Login:", "no table cell follows", id="nothing after it"),
+        pytest.param("Notes:", "no table cell follows", id="not in a table"),
+    ],
+)
+async def test_a_reading_is_refused_with_a_reason_for_the_model(page, recorder, label, message):
+    await _start_on_html(recorder, page, REFUSED_READING_PAGE)
+    with pytest.raises(ExtractionRefused, match=message):
+        await recorder.draft_extraction(label, "checking_balance_before", "Read it", page, _bank_run())
+
+
+@pytest.mark.anyio
+async def test_a_declared_value_is_read_by_its_label_and_returned(discovery, dashboard_popup, storage):
+    dashboard_popup(False)
+    reading = ("extract_text", {"label": "Primary Account Balance:", "output_key": "checking_balance_before",
+                                "reason": "Read the balance before paying"})
+    # After the search the member's page is open: read there, then go on to pay.
+    result, _ = await discovery(*TO_CONFIRM_PAGE[:6], reading, *TO_CONFIRM_PAGE[6:], CONFIRM,
+                                outputs=[BALANCE_OUTPUT])
+    assert result.status == ExecutionStatus.HUMAN_ESCALATED, result.error
+    assert result.terminal_outputs == {"checking_balance_before": "$2450.32"}
+    [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
+    artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
+    [step] = [step for step in artifact.steps if step.action == ActionType.EXTRACT_TEXT]
+    assert step.output_key == "checking_balance_before"
+    assert "Primary Account Balance:" in step.locators[0].value
+    assert all("2450.32" not in locator.value for locator in step.locators)
+
+
+@pytest.mark.anyio
+async def test_the_goal_cant_be_marked_complete_until_every_declared_value_is_read(discovery):
+    done = ("mark_goal_complete", {"summary": "Done"})
+    result, model = await discovery(NOTICE_CHECK, done, STOP, outputs=[BALANCE_OUTPUT])
+    answer = model.received[2]["content"][0]
+    assert answer["is_error"] is True
+    assert "checking_balance_before" in answer["content"]
+    assert result.error.code == "STUCK_NO_PROGRESS"
+
+
+@pytest.mark.anyio
+async def test_the_irreversible_stop_waits_until_every_declared_value_is_read(
+    discovery, dashboard_popup, storage, run_logger
+):
+    # Stopping at the final submission would lose the run, so the model is sent back first.
+    dashboard_popup(False)
+    result, model = await discovery(*TO_CONFIRM_PAGE, CONFIRM, STOP, outputs=[BALANCE_OUTPUT])
+    answer = model.received[-1]["content"][0]
+    assert "checking_balance_before" in answer["content"]
+    assert result.error.code == "STUCK_NO_PROGRESS"
+    assert not storage.exists()
+    tiers = [line["safety_tier"] for line in _log_lines(run_logger) if line["event_type"] == "STEP_RECORDED"]
+    assert "IRREVERSIBLE" not in tiers
+
+
+@pytest.mark.anyio
+async def test_a_lower_step_limit_can_be_set_for_one_run(discovery):
+    result, _ = await discovery(NOTICE_CHECK, NOTICE_CHECK, max_steps=1)
+    assert result.error.code == "MAX_STEPS"
+    assert "(1)" in result.error.message
+
+
+# Kept last in the file: this test really pays in the shared test bank, which changes the
+# member's balance for anything that runs after it in the same session.
+NEW_BALANCE_OUTPUT = OutputParamDefinition(key="new_checking_balance", type=ParamType.STRING,
+                                           description="Checking balance after paying")
+
+
+@pytest.mark.anyio
+async def test_in_a_sandbox_discovery_performs_the_irreversible_step_and_learns_what_follows(
+    discovery, dashboard_popup, storage, run_logger
+):
+    dashboard_popup(False)
+    before = ("extract_text", {"label": "Primary Account Balance:", "output_key": "checking_balance_before",
+                               "reason": "Read the balance before paying"})
+    after = ("extract_text", {"label": "New Checking Balance:", "output_key": "new_checking_balance",
+                              "reason": "Read the balance after paying"})
+    paid = ("assert_visible", {"expected_text": "Payment Submitted Successfully", "reason": "Check the payment went through"})
+    done = ("mark_goal_complete", {"summary": "Paid the bill and read the balances"})
+    result, _ = await discovery(*TO_CONFIRM_PAGE[:6], before, *TO_CONFIRM_PAGE[6:], CONFIRM, paid, after, done,
+                                outputs=[BALANCE_OUTPUT, NEW_BALANCE_OUTPUT], sandbox=True)
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    outputs = result.terminal_outputs
+    assert float(outputs["new_checking_balance"].lstrip("$")) == float(outputs["checking_balance_before"].lstrip("$")) - 50
+    [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
+    artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
+    irreversible = next(step for step in artifact.steps if step.safety_tier == SafetyTier.IRREVERSIBLE)
+    assert irreversible.checkpoints  # performed, so what it led to is checked too
+    assert [step.action for step in artifact.steps[irreversible.sequence_index + 1:]] == [
+        ActionType.ASSERT_TEXT, ActionType.EXTRACT_TEXT]
+    events = [line["event_type"] for line in _log_lines(run_logger)]
+    assert "IRREVERSIBLE_EXECUTED" in events and "DIALOG_ACCEPTED" in events
