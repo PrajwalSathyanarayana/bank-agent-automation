@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -31,9 +32,15 @@ from src.types.placeholders import MissingValue, fill_text, find_placeholders, i
 from src.types.routes import route_allowed, valid_route_pattern
 from src.types.versioning import Change, UnruledField, bump, change_between, parse_version, version_text
 from src.types.result_schema import (
+    BusinessOutcome,
+    ErrorDetail,
     EvidencePaths,
     ExecutionResult,
     ExecutionStatus,
+    FailureDetail,
+    HandoffTelemetry,
+    RecoveryAttemptLog,
+    RecoveryTier,
     StepExecutionTrace,
     StepStatus,
 )
@@ -369,6 +376,94 @@ def test_step_execution_trace_requires_positive_attempt_count():
             attempt_count=0,
             duration_ms=100,
         )
+
+
+def _result_with(status, mode="REPLAY", **fields) -> ExecutionResult:
+    now = datetime.now(timezone.utc)
+    return ExecutionResult(capability="member-lookup", mode=mode, status=status, start_time=now, end_time=now,
+                           duration_ms=1200, **fields,
+                           evidence_paths=EvidencePaths(log_file="evidence/replay/run_log.json",
+                                                        screenshots_dir="evidence/replay/screenshots"))
+
+
+RESULT_ERROR = ErrorDetail(code="CHECK_FAILED", message="The page after the search was not the member's page")
+RESULT_OUTCOME = BusinessOutcome(code="MEMBER_NOT_FOUND", description="No member has this ID")
+RESULT_FAILURE = FailureDetail(step_index=6, step_description="Run the member search",
+                               expected="page path /member/10234", observed="page path /member/not-found")
+RESULT_HANDOFF = HandoffTelemetry(triggered_timestamp=datetime.now(timezone.utc), trigger_reason="OVER_AUTO_LIMIT")
+
+
+@pytest.mark.parametrize(
+    "status, fields",
+    [
+        pytest.param(ExecutionStatus.SUCCESS, {"terminal_outputs": {"balance": "2450.32"}}, id="success with outputs"),
+        pytest.param(ExecutionStatus.BUSINESS_OUTCOME, {"outcome": RESULT_OUTCOME}, id="an answer with its code"),
+        pytest.param(ExecutionStatus.TECHNICAL_FAIL, {"error": RESULT_ERROR, "failure": RESULT_FAILURE},
+                     id="a failure with where and how"),
+        pytest.param(ExecutionStatus.HARD_ABORT, {"error": RESULT_ERROR}, id="a stop with its reason"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED, {"handoff_events": [RESULT_HANDOFF], "failure": RESULT_FAILURE},
+                     id="an escalation with its handoff"),
+    ],
+)
+def test_each_status_carries_its_own_fields(status, fields):
+    assert _result_with(status, **fields).status == status
+
+
+@pytest.mark.parametrize(
+    "status, fields",
+    [
+        pytest.param(ExecutionStatus.SUCCESS, {"error": RESULT_ERROR}, id="success with an error"),
+        pytest.param(ExecutionStatus.SUCCESS, {"outcome": RESULT_OUTCOME}, id="success with an outcome"),
+        pytest.param(ExecutionStatus.BUSINESS_OUTCOME, {}, id="an answer without its code"),
+        pytest.param(ExecutionStatus.BUSINESS_OUTCOME, {"outcome": RESULT_OUTCOME, "failure": RESULT_FAILURE},
+                     id="an answer with a failure"),
+        pytest.param(ExecutionStatus.TECHNICAL_FAIL, {"failure": RESULT_FAILURE}, id="a failure without an error"),
+        pytest.param(ExecutionStatus.HARD_ABORT, {"error": RESULT_ERROR, "outcome": RESULT_OUTCOME},
+                     id="a stop with an outcome"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED, {}, id="an escalation without a handoff"),
+    ],
+)
+def test_a_result_that_mixes_up_its_status_is_refused(status, fields):
+    with pytest.raises(ValidationError, match="carries"):
+        _result_with(status, **fields)
+
+
+def test_a_failure_says_where_and_how_in_a_few_words():
+    with pytest.raises(ValidationError):
+        FailureDetail(step_index=1, step_description="Search", expected="x" * 201, observed="the member's page")
+
+
+def test_an_outcome_code_is_a_stable_capitalised_name():
+    with pytest.raises(ValidationError):
+        BusinessOutcome(code="member not found", description="No member has this ID")
+
+
+def test_only_replay_verifies_a_signature():
+    assert _result_with(ExecutionStatus.SUCCESS, integrity_verified=True).integrity_verified
+    with pytest.raises(ValidationError, match="only replay"):
+        _result_with(ExecutionStatus.SUCCESS, mode="DISCOVERY", integrity_verified=True)
+
+
+def test_a_result_comes_only_from_discovery_or_replay():
+    with pytest.raises(ValidationError):
+        _result_with(ExecutionStatus.SUCCESS, mode="TEST")
+
+
+def test_a_result_is_printed_without_empty_fields():
+    printed = json.loads(_result_with(ExecutionStatus.BUSINESS_OUTCOME, outcome=RESULT_OUTCOME).to_json())
+    assert printed["outcome"] == {"code": "MEMBER_NOT_FOUND", "description": "No member has this ID"}
+    assert not {"error", "failure", "terminal_outputs", "step_traces", "handoff_events",
+                "artifact_version"} & printed.keys()
+    assert "playwright_trace_zip" not in printed["evidence_paths"]
+    assert printed["integrity_verified"] is False  # false is a value, not an empty field
+
+
+def test_a_recovery_names_the_interruption_it_cleared():
+    log = RecoveryAttemptLog(timestamp=datetime.now(timezone.utc), tier=RecoveryTier.TIER_1_RULE,
+                             interruption_code="PROMO_POPUP", resolved=True)
+    assert log.interruption_code == "PROMO_POPUP"
+    # No model-based tier: it was cut, so the format doesn't offer it.
+    assert [tier.value for tier in RecoveryTier] == ["TIER_1_RULE", "TIER_3_HANDOFF"]
 
 
 # --- output contract (EXTRACT_TEXT + output_key + output_definitions) ---

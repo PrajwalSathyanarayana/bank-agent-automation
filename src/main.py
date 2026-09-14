@@ -101,7 +101,7 @@ async def _discover(args: argparse.Namespace) -> int:
         CONTRACTS[BILL_PAY], {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee}
     )
     result = await discover(request, ClaudeModel(), logger, headless=not args.headed, max_steps=args.max_steps)
-    print(result.model_dump_json(indent=2))
+    print(result.to_json())
     print(f"Run log: {logger.log_path}")
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.HUMAN_ESCALATED) else 1
 
