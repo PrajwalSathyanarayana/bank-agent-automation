@@ -17,6 +17,7 @@ class Env(BaseSettings):
     mock_bank_base_url: str = "http://localhost:5000"
     # What the bank address points at. In a sandbox (a test copy) discovery may perform
     # an irreversible step to learn what follows it; in production it never does.
+    # Discovery accepts "sandbox" only for a bank on this machine (src/safety/sandbox.py).
     target_environment: Literal["sandbox", "production"] = "production"
     mock_bank_secret_key: SecretStr
     mock_bank_username: str

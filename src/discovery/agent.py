@@ -45,6 +45,7 @@ from src.discovery.recorder import Action, AssertionRefused, ExtractionRefused, 
 from src.observability.logger import RunLogger
 from src.safety.allowlist import AllowlistViolation, check_domain, enforce_safety
 from src.safety.redactor import redact_text, scrub_known_values
+from src.safety.sandbox import sandbox_refusal
 from src.types.artifact_schema import CredentialKind, ParamType
 from src.types.placeholders import fill_text
 from src.types.result_schema import (
@@ -174,7 +175,8 @@ async def discover(
     HUMAN_ESCALATED with a saved artifact, HARD_ABORT with a reason, or TECHNICAL_FAIL.
     max_steps lowers the step limit for one run (e.g. a first, cautious real run).
     sandbox says whether the bank is a test copy, where an irreversible step is
-    performed to learn what follows it; None reads TARGET_ENVIRONMENT.
+    performed to learn what follows it; None reads TARGET_ENVIRONMENT. A sandbox run
+    whose start address isn't on this machine is refused before the browser opens.
     """
     if sandbox is None:
         sandbox = env.target_environment == "sandbox"
@@ -252,6 +254,10 @@ class _Discovery:
 
     async def execute(self) -> ExecutionResult:
         self._logger.execution_started(self._goal)
+        # A run that may confirm a payment must start on this machine; the allowlist
+        # then keeps every page it acts on at the bank's own host.
+        if self._sandbox and (refusal := sandbox_refusal(self._contract.target_url)):
+            return self._end(ExecutionStatus.HARD_ABORT, "SANDBOX_NOT_LOCAL", refusal)
         try:
             async with BrowserSession(self._logger, headless=self._headless) as session:
                 self._session = session

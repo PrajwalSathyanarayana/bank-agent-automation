@@ -2647,6 +2647,46 @@ async def test_a_lower_step_limit_can_be_set_for_one_run(discovery):
     assert "(1)" in result.error.message
 
 
+class _BrowserReached(Exception):
+    pass
+
+
+def _browser_trap(monkeypatch):
+    # Stands in for the browser: reaching it raises, so a test sees whether the run got
+    # that far, with no browser started and nothing sent over the network.
+    def trap(*args, **kwargs):
+        raise _BrowserReached()
+
+    monkeypatch.setattr("src.discovery.agent.BrowserSession", trap)
+
+
+REMOTE_BANK = "https://bank.example.com/login"
+RUN_VALUES = {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}
+
+
+@pytest.mark.anyio
+async def test_a_sandbox_run_is_refused_when_the_bank_is_not_on_this_machine(monkeypatch, storage, run_logger):
+    _browser_trap(monkeypatch)
+    model = ScriptedModel()
+    request = DiscoveryRequest(dataclasses.replace(_ab_contract(), target_url=REMOTE_BANK), RUN_VALUES)
+    result = await discover(request, model, run_logger, sandbox=True)
+    assert result.status == ExecutionStatus.HARD_ABORT
+    assert result.error.code == "SANDBOX_NOT_LOCAL"
+    assert "bank.example.com" in result.error.message
+    assert model.received == []
+    assert not storage.exists()
+    events = [line["event_type"] for line in _log_lines(run_logger)]
+    assert events == ["EXECUTION_STARTED", "RUN_USAGE", "EXECUTION_ENDED", "SUMMARY_METRICS"]
+
+
+@pytest.mark.anyio
+async def test_a_production_run_is_not_held_to_this_machine(monkeypatch, run_logger):
+    _browser_trap(monkeypatch)
+    request = DiscoveryRequest(dataclasses.replace(_ab_contract(), target_url=REMOTE_BANK), RUN_VALUES)
+    with pytest.raises(_BrowserReached):
+        await discover(request, ScriptedModel(), run_logger, sandbox=False)
+
+
 # Kept last in the file: this test really pays in the shared test bank, which changes the
 # member's balance for anything that runs after it in the same session.
 NEW_BALANCE_OUTPUT = OutputParamDefinition(key="new_checking_balance", type=ParamType.STRING,

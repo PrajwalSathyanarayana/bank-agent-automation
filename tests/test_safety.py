@@ -23,6 +23,7 @@ from src.safety.integrity import (
     verify,
 )
 from src.safety.redactor import REDACTED, redact_dict, redact_text, scrub_known_values, sensitive_patterns_in
+from src.safety.sandbox import sandbox_refusal
 from src.safety.secret_typing import typing_refusal
 from src.types.artifact_schema import (
     Artifact,
@@ -469,3 +470,34 @@ def test_a_password_box_takes_exactly_one_secret_and_a_secret_goes_nowhere_else(
 )
 def test_refusal_wording(value, into_password_box, secret_names, expected):
     assert typing_refusal(value, into_password_box=into_password_box, secret_names=secret_names) == expected
+
+
+# --- where a sandbox may be ---
+
+@pytest.mark.parametrize(
+    "url, allowed",
+    [
+        pytest.param("http://localhost:5000/login", True, id="localhost"),
+        pytest.param("http://LOCALHOST:5000/", True, id="localhost in capitals"),
+        pytest.param("http://127.0.0.1:5000/", True, id="IPv4 loopback"),
+        pytest.param("http://[::1]:5000/", True, id="IPv6 loopback"),
+        pytest.param("https://bank.example.com/login", False, id="remote bank"),
+        pytest.param("http://localhost.bank.example.com/", False, id="localhost as a subdomain"),
+        pytest.param("http://localhost@bank.example.com/", False, id="localhost as user info"),
+        pytest.param("http://bank.example.com/?next=http://localhost/", False, id="localhost in the query"),
+        pytest.param("http://10.0.0.5:5000/", False, id="another machine on the network"),
+        pytest.param("http://0.0.0.0:5000/", False, id="all interfaces"),
+        pytest.param("/login", False, id="no host"),
+        pytest.param("http://[::1", False, id="unreadable address"),
+    ],
+)
+def test_a_sandbox_must_be_on_this_machine(url, allowed):
+    assert (sandbox_refusal(url) is None) == allowed
+
+
+def test_sandbox_refusal_names_the_rule_and_the_host():
+    assert sandbox_refusal("https://bank.example.com/login") == (
+        "a sandbox must run on this machine (localhost, 127.0.0.1 or ::1), "
+        "but the start address's host is bank.example.com"
+    )
+    assert sandbox_refusal("/login").endswith("but the start address has no host")
