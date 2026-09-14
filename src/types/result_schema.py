@@ -98,7 +98,8 @@ class ExecutionResult(BaseModel):
         default_factory=list
     )
     evidence_paths: EvidencePaths
-    terminal_outputs: Optional[dict[str, str | int | bool]] = Field(
+    # Money arrives as exact decimal text ("2450.32"); a float is only ever a plain number.
+    terminal_outputs: Optional[dict[str, str | int | float | bool]] = Field(
         default=None,
         description="Extracted data returned to the calling agent"
     )

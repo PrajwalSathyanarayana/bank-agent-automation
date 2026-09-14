@@ -343,6 +343,19 @@ def test_execution_result_constructs_with_valid_data():
     assert result.step_traces == []
 
 
+def test_execution_result_keeps_each_output_in_its_own_type():
+    now = datetime.now(timezone.utc)
+    outputs = {"balance": "2450.32", "count": 3, "rate": 12.5, "active": True}
+    result = ExecutionResult(
+        capability="member-lookup", mode="REPLAY", status=ExecutionStatus.SUCCESS,
+        start_time=now, end_time=now, duration_ms=1200, terminal_outputs=outputs,
+        evidence_paths=EvidencePaths(log_file="evidence/replay/run_log.json",
+                                     screenshots_dir="evidence/replay/screenshots"),
+    )
+    assert result.terminal_outputs == outputs
+    assert [type(value) for value in result.terminal_outputs.values()] == [str, int, float, bool]
+
+
 def test_step_execution_trace_requires_positive_attempt_count():
     with pytest.raises(ValidationError):
         StepExecutionTrace(

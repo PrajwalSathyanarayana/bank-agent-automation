@@ -30,12 +30,14 @@ from src.discovery.browser import (
 )
 from src.discovery.locators import NoProvenLocator, RunValues, derive_locators
 from src.discovery.perception import Observation, PageElement, UnknownElement, observing
+from src.locating.values import UnreadableValue, read_output
 from src.discovery.prompts import (
     ASSERT_FIRST,
     NO_ACTION_REPROMPT,
     SYSTEM_PROMPT,
     allowlist_refusal,
     goal_message,
+    output_kind,
     outputs_first,
     page_blocks,
     progress,
@@ -240,7 +242,11 @@ class _Discovery:
 
         self._recorder = Recorder(logger)
         self._messages: list[dict[str, Any]] = []
-        self._outputs: dict[str, str] = {}
+        # Each output as its declared type, for the caller; the page's text as shown, for the
+        # save-time scan, which looks for that text in what the model asked to check.
+        self._outputs: dict[str, Union[str, int, float]] = {}
+        self._read_text: dict[str, str] = {}
+        self._output_definitions = {output.key: output for output in contract.output_definitions}
         self._turns = 0
         self._retries = 0
         self._violations = 0
@@ -386,9 +392,18 @@ class _Discovery:
             return _Next(f"Refused: {refused}.", call_id, is_error=True)
         except AllowlistViolation:
             return self._violation(call_id)
+        key = args["output_key"]
+        definition = self._output_definitions[key]
+        try:
+            # Checked before recording: a value of the wrong kind usually means the wrong label.
+            value = read_output(drafted.value, definition)
+        except UnreadableValue as unreadable:
+            return _Next(f"Refused: {key} must be {output_kind(definition)}, but {unreadable}; "
+                         "read it by the label right before that value.", call_id, is_error=True)
         await self._recorder.commit(drafted.step, self._page, self._run, derived=drafted.derived)
-        self._outputs[args["output_key"]] = drafted.value
-        return _Next(self._with_dialogs(f'Done: read "{drafted.value}" into {args["output_key"]}.'), call_id)
+        self._outputs[key] = value
+        self._read_text[key] = drafted.value
+        return _Next(self._with_dialogs(f'Done: read "{drafted.value}" into {key}.'), call_id)
 
     async def _act(self, name: str, args: dict[str, Any], call_id: str, observation: Observation) -> Union[_Next, ExecutionResult]:
         kind = _TOOL_ACTIONS.get(name)
@@ -484,7 +499,7 @@ class _Discovery:
         return _Next(allowlist_refusal(first=True), call_id, is_error=True)
 
     def _save(self, status: ExecutionStatus) -> ExecutionResult:
-        inputs = ScanInputs(self._run, username_key=self._username_key, extracted=dict(self._outputs))
+        inputs = ScanInputs(self._run, username_key=self._username_key, extracted=dict(self._read_text))
         built = build_and_save(self._contract, self._recorder.steps, inputs, self._logger)
         if built.error is not None:
             return self._end(ExecutionStatus.HARD_ABORT, error=built.error)
@@ -497,7 +512,8 @@ class _Discovery:
 
     def _end(self, status: ExecutionStatus, code: Optional[str] = None, message: Optional[str] = None, *,
              error: Optional[ErrorDetail] = None, artifact_version: Optional[str] = None,
-             handoff: Optional[HandoffTelemetry] = None, outputs: Optional[dict[str, str]] = None) -> ExecutionResult:
+             handoff: Optional[HandoffTelemetry] = None,
+             outputs: Optional[dict[str, Union[str, int, float]]] = None) -> ExecutionResult:
         if error is None and code is not None:
             error = ErrorDetail(code=code, message=message or code)
         duration_ms = int((time.monotonic() - self._started) * 1000)

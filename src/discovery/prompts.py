@@ -9,7 +9,13 @@ from collections.abc import Sequence
 from typing import Any, Mapping
 
 from src.discovery.browser import number_text
-from src.types.artifact_schema import CredentialDefinition, CredentialKind, InputParamDefinition, OutputParamDefinition
+from src.types.artifact_schema import (
+    CredentialDefinition,
+    CredentialKind,
+    InputParamDefinition,
+    OutputParamDefinition,
+    OutputType,
+)
 from src.types.placeholders import CREDENTIAL_PREFIX
 
 # The categories report_stuck accepts; the loop ends with STUCK_<category>.
@@ -180,9 +186,16 @@ def goal_message(
             lines.append(f"- {{{CREDENTIAL_PREFIX}:{credential.key}}} ({credential.description}; {kind})")
     if outputs:
         lines += ["", "Values to read with extract_text, before any final submission:"]
-        lines += [f"- {output.key} ({output.description})" for output in outputs]
+        lines += [f"- {output.key} ({output.description}; {output_kind(output)})" for output in outputs]
     lines += ["", "The start page is open."]
     return "\n".join(lines)
+
+
+def output_kind(output: OutputParamDefinition) -> str:
+    """What an output holds, in words for the model: "an amount in USD", "a number", "text"."""
+    if output.type == OutputType.MONEY:
+        return f"an amount in {output.currency}"
+    return "a number" if output.type == OutputType.NUMBER else "text"
 
 
 def progress(step: int, max_steps: int, time_left_ms: int) -> str:

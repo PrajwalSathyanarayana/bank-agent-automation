@@ -2390,9 +2390,17 @@ def test_the_goal_message_gives_placeholders_and_values_but_credentials_by_name_
     assert text.startswith("Goal: For member 10234, pay 50 to Sunbelt Electric Co.")
     assert '{member_id} = "10234"' in text and '{amount} = "50"' in text
     assert "{credential:bank_password} (Teller password; secret: password boxes only)" in text
-    assert "checking_balance (Checking balance before paying)" in text
+    assert "checking_balance (Checking balance before paying; text)" in text
     assert env.mock_bank_username not in text
     assert env.mock_bank_password.get_secret_value() not in text
+
+
+def test_the_goal_message_says_what_kind_of_value_each_output_is():
+    outputs = [OutputParamDefinition(key="balance", type=OutputType.MONEY, description="Balance", currency="USD"),
+               OutputParamDefinition(key="count", type=OutputType.NUMBER, description="Count")]
+    text = goal_message("Read them.", [], {}, [], outputs)
+    assert "- balance (Balance; an amount in USD)" in text
+    assert "- count (Count; a number)" in text
 
 
 def test_progress_and_page_blocks_are_packaged_for_the_model():
@@ -2681,6 +2689,54 @@ async def test_a_declared_value_is_read_by_its_label_and_returned(discovery, das
     assert step.output_key == "checking_balance_before"
     assert "Primary Account Balance:" in step.locators[0].value
     assert all("2450.32" not in locator.value for locator in step.locators)
+
+
+MONEY_BALANCE_OUTPUT = OutputParamDefinition(key="checking_balance_before", type=OutputType.MONEY, currency="USD",
+                                             description="Checking balance before paying")
+READ_BALANCE = ("extract_text", {"label": "Primary Account Balance:", "output_key": "checking_balance_before",
+                                 "reason": "Read the balance before paying"})
+
+
+@pytest.mark.anyio
+async def test_a_money_value_is_returned_exactly_as_decimal_text(discovery, dashboard_popup):
+    dashboard_popup(False)
+    result, _ = await discovery(*TO_CONFIRM_PAGE[:6], READ_BALANCE, *TO_CONFIRM_PAGE[6:], CONFIRM,
+                                outputs=[MONEY_BALANCE_OUTPUT])
+    assert result.status == ExecutionStatus.HUMAN_ESCALATED, result.error
+    assert result.terminal_outputs == {"checking_balance_before": "2450.32"}
+
+
+@pytest.mark.anyio
+async def test_a_value_of_the_wrong_kind_is_refused_and_not_recorded(discovery, dashboard_popup, storage):
+    dashboard_popup(False)
+    wrong = ("extract_text", {"label": "Primary Account Type:", "output_key": "checking_balance_before",
+                              "reason": "Read the balance"})
+    result, model = await discovery(*TO_CONFIRM_PAGE[:6], wrong, READ_BALANCE, *TO_CONFIRM_PAGE[6:], CONFIRM,
+                                    outputs=[MONEY_BALANCE_OUTPUT])
+    # The wrong reading is the seventh reply; the loop's answer to it opens the eighth message.
+    answer = model.received[7]["content"][0]
+    assert answer["is_error"] is True
+    assert answer["content"] == ('Refused: checking_balance_before must be an amount in USD, but "checking" is not '
+                                 "a USD amount; read it by the label right before that value.")
+    assert result.terminal_outputs == {"checking_balance_before": "2450.32"}
+    [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
+    artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
+    assert [step.action for step in artifact.steps].count(ActionType.EXTRACT_TEXT) == 1
+
+
+@pytest.mark.anyio
+async def test_a_number_value_is_returned_as_a_number(discovery, dashboard_popup):
+    dashboard_popup(False)
+    count = OutputParamDefinition(key="restricted_members", type=OutputType.NUMBER,
+                                  description="Members with restricted accounts")
+    reading = ("extract_text", {"label": "Members with Restricted Accounts", "output_key": "restricted_members",
+                                "reason": "Read the count"})
+    check = ("assert_visible", {"expected_text": "Figures since system start", "reason": "Check the dashboard"})
+    done = ("mark_goal_complete", {"summary": "Read the count"})
+    result, _ = await discovery(*SIGN_IN, reading, check, done, outputs=[count])
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    assert result.terminal_outputs == {"restricted_members": 1}
+    assert type(result.terminal_outputs["restricted_members"]) is int
 
 
 @pytest.mark.anyio
