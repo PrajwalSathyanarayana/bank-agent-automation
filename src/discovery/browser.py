@@ -5,7 +5,7 @@ A secret becomes its real value inside type_text, as the last step before the ke
 and nowhere else: never in a log line, a retry record, an error or the reply to the
 model. Every action has a time cap, and a dialog nobody expected is dismissed.
 """
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from decimal import Decimal
 from typing import Optional, Union
 from urllib.parse import urlsplit
@@ -62,22 +62,27 @@ def placeholder_values(
     return values
 
 
-def dismiss_dialogs(page: Page, logger: Optional[RunLogger] = None) -> list[str]:
-    """Dismiss every dialog the page opens, and note each one's type and wording.
+def dismiss_dialogs(
+    page: Page, logger: Optional[RunLogger] = None, *, accept_now: Callable[[], bool] = lambda: False
+) -> list[str]:
+    """Answer every dialog the page opens, and note each one's type and wording.
 
-    Nothing this system does should open one: discovery never clicks the irreversible
-    button, and a confirm usually guards an action nobody meant, so dismissing is the
-    safe answer. Returns the list the notes go into, for the loop to tell the model.
+    A dialog is dismissed, since a confirm usually guards an action nobody meant, unless
+    accept_now() says the system is performing an action expected to ask (an
+    irreversible step in a test environment). Returns the list the notes go into, for
+    the loop to tell the model.
     """
     notes: list[str] = []
 
     async def on_dialog(dialog: Dialog) -> None:
-        # Dismissed first: an error while noting it must never leave the page blocked,
+        # Answered first: an error while noting it must never leave the page blocked,
         # since an open dialog stalls the page until someone answers it.
-        await dialog.dismiss()
-        notes.append(f"{dialog.type}: {dialog.message}")
+        accepted = accept_now()
+        await (dialog.accept() if accepted else dialog.dismiss())
+        notes.append(f"{dialog.type}{' (accepted)' if accepted else ''}: {dialog.message}")
         if logger is not None:
-            logger.dialog_dismissed(dialog.type, dialog.message)
+            answer = logger.dialog_accepted if accepted else logger.dialog_dismissed
+            answer(dialog.type, dialog.message)
 
     page.on("dialog", on_dialog)
     return notes
@@ -126,6 +131,8 @@ class BrowserSession:
         self._browser: Optional[Browser] = None
         self.page: Optional[Page] = None
         self.dialogs: list[str] = []
+        # Set only while the system performs an action expected to open a dialog.
+        self.accepting_dialogs = False
 
     async def __aenter__(self) -> "BrowserSession":
         self._playwright = await async_playwright().start()
@@ -141,7 +148,7 @@ class BrowserSession:
         except BaseException:
             await self._close()
             raise
-        self.dialogs = dismiss_dialogs(self.page, self._logger)
+        self.dialogs = dismiss_dialogs(self.page, self._logger, accept_now=lambda: self.accepting_dialogs)
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
