@@ -19,7 +19,9 @@ SENSITIVE_KEYS = {
 # an unrelated long digit run — accepted rather than
 # over-engineering PII detection for this scope.
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-_PHONE_RE = re.compile(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
+# A phone number stands on its own, like the SSN and card patterns: never digits inside a
+# longer token, such as a run of ten decimal digits in a hex signature.
+_PHONE_RE = re.compile(r"(?<!\w)\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\w)")
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,16}\b")
 

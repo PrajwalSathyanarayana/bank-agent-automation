@@ -22,7 +22,7 @@ from src.safety.integrity import (
     sign,
     verify,
 )
-from src.safety.redactor import REDACTED, redact_dict, redact_text, scrub_known_values
+from src.safety.redactor import REDACTED, redact_dict, redact_text, scrub_known_values, sensitive_patterns_in
 from src.safety.secret_typing import typing_refusal
 from src.types.artifact_schema import (
     Artifact,
@@ -234,6 +234,18 @@ def test_redact_text_scrubs_email():
 
 def test_redact_text_scrubs_phone_number():
     assert redact_text("call (602) 555-0142 now") == f"call {REDACTED} now"
+
+
+@pytest.mark.parametrize("text", ["call 602-555-0142 now", "Tel: 6025550142", "(602) 555-0142."])
+def test_redact_text_scrubs_phone_numbers_in_their_usual_forms(text):
+    assert "555" not in redact_text(text)
+
+
+def test_digits_inside_a_longer_token_are_not_a_phone_number():
+    # A real signature that was corrupted in the log before the pattern needed a token of its own.
+    signature = "9c7233a39d653e94983bee0f30410a93587be6ee884607320325369bb12b8469"
+    assert redact_text(signature) == signature
+    assert sensitive_patterns_in(f"saved {signature}") == []
 
 
 def test_redact_text_scrubs_ssn_pattern():
