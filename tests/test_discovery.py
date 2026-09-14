@@ -1924,6 +1924,19 @@ def test_known_outcomes_and_currencies_are_read_as_the_engineers_contract():
     assert not [path for path in kinds if path.endswith(("/code", "/signal", "/input_key", "/currency"))]
 
 
+def test_the_allowed_pages_are_read_as_the_engineers_contract():
+    inputs = _bs_inputs()
+    data = _bs_artifact().model_dump(mode="json")
+    data["allowed_paths"] = ["/login", f"/{FAKE_PASSWORD}"]
+    artifact = Artifact.model_validate(data)
+    kinds = {"/".join(map(str, field.path)): field.kind for field in artifact_fields(artifact)}
+    assert (kinds["allowed_paths/0"], kinds["allowed_paths/1"]) == (FieldKind.CONTRACT, FieldKind.CONTRACT)
+    [finding] = find_problems(convert(artifact, inputs), inputs)
+    assert finding.code == AbortCode.SECRET_LITERAL
+    assert "allowed page 1" in finding.message
+    assert FAKE_PASSWORD not in finding.message
+
+
 def test_a_secret_in_a_known_outcome_stops_the_save_and_names_the_outcome():
     inputs = _bs_inputs()
     data = _bs_artifact().model_dump(mode="json")
@@ -2223,6 +2236,23 @@ def test_a_known_outcome_naming_an_undeclared_input_is_not_saved(storage, run_lo
     result = build_and_save(contract, [_ab_start()], _bs_inputs(), run_logger)
     assert result.error.code == "ARTIFACT_INVALID"
     assert "payee is not a declared input" in result.error.message
+    assert not storage.exists()
+
+
+def test_the_contracts_allowed_pages_are_saved_and_signed(storage, run_logger):
+    contract = dataclasses.replace(_ab_contract(), allowed_paths=["/login", "/member/*"])
+    result = build_and_save(contract, [_ab_start()], _bs_inputs(), run_logger)
+    assert result.error is None
+    saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
+    assert saved.allowed_paths == ["/login", "/member/*"]
+    verify(saved, env.artifact_signing_key)
+
+
+def test_a_contract_whose_start_page_is_not_allowed_is_not_saved(storage, run_logger):
+    contract = dataclasses.replace(_ab_contract(), allowed_paths=["/member/*"])
+    result = build_and_save(contract, [_ab_start()], _bs_inputs(), run_logger)
+    assert result.error.code == "ARTIFACT_INVALID"
+    assert "start page" in result.error.message
     assert not storage.exists()
 
 

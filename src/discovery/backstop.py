@@ -125,6 +125,8 @@ def artifact_fields(artifact: Artifact) -> list[ScannedField]:
     for position, outcome in enumerate(artifact.known_outcomes):
         add(("known_outcomes", position, "description"), FieldKind.CONTRACT, outcome.description)
         add(("known_outcomes", position, "text"), FieldKind.CONTRACT, outcome.text)
+    for position, pattern in enumerate(artifact.allowed_paths):
+        add(("allowed_paths", position), FieldKind.CONTRACT, pattern)
 
     for position, step in enumerate(artifact.steps):
         at: Path = ("steps", position)
@@ -505,6 +507,8 @@ def _where(field: ScannedField, artifact: Artifact) -> str:
         return "the goal template" if rest == ["description"] else f"the {str(rest[0]).replace('_', ' ')}"
     if group == "global_assertions":
         return f"final check {rest[0]}"
+    if group == "allowed_paths":
+        return f"allowed page {rest[0]}"
     position, name = rest
     entry = getattr(artifact, str(group))[position]
     # A known outcome is named by its code; every other definition by its key.

@@ -28,6 +28,7 @@ from src.types.artifact_schema import (
 )
 from src.types import versioning
 from src.types.placeholders import MissingValue, fill_text, find_placeholders, iter_placeholders
+from src.types.routes import route_allowed, valid_route_pattern
 from src.types.versioning import Change, UnruledField, bump, change_between, parse_version, version_text
 from src.types.result_schema import (
     EvidencePaths,
@@ -630,6 +631,7 @@ def _set(path, value):
                      id="an output"),
         pytest.param(_set(("known_outcomes",), [_outcome().model_dump(mode="json")]), Change.MAJOR,
                      id="a new known outcome"),
+        pytest.param(_set(("allowed_paths",), ["/search"]), Change.MAJOR, id="the allowed pages"),
     ],
 )
 def test_a_new_recording_is_a_change_of_the_largest_kind_it_contains(edit, expected):
@@ -651,6 +653,69 @@ def test_a_field_with_no_versioning_rule_stops_the_comparison(monkeypatch):
     artifact = Artifact.model_validate(_recording())
     with pytest.raises(UnruledField, match="known_outcomes"):
         change_between(artifact, artifact)
+
+
+# --- allowed pages ---
+
+@pytest.mark.parametrize(
+    "path, allowed",
+    [
+        pytest.param("/member/10234", True, id="one segment"),
+        pytest.param("/member/not-found", True, id="any one segment"),
+        pytest.param("/member/10234/accounts", True, id="a longer pattern"),
+        pytest.param("/", True, id="the root"),
+        pytest.param("/billpay/confirm", True, id="an exact path"),
+        pytest.param("/member/10234/edit", False, id="a page not listed"),
+        pytest.param("/member", False, id="the star needs a segment"),
+        pytest.param("/member/", False, id="an empty segment is not one"),
+        pytest.param("/billpay/", False, id="a trailing slash"),
+        pytest.param("/Billpay", False, id="case matters"),
+        pytest.param("/static/css/legacy.css", False, id="a file, not a listed page"),
+    ],
+)
+def test_a_page_is_allowed_only_when_its_path_matches_a_pattern(path, allowed):
+    patterns = ["/", "/member/*", "/member/*/accounts", "/billpay", "/billpay/confirm"]
+    assert route_allowed(path, patterns) == allowed
+
+
+def _artifact_allowing(*patterns) -> Artifact:
+    # The metadata's start page is /search.
+    return Artifact(metadata=_valid_metadata(), allowed_paths=list(patterns), steps=[_valid_step()])
+
+
+def test_an_artifact_lists_the_pages_it_may_visit():
+    assert _artifact_allowing("/search", "/member/*").allowed_paths == ["/search", "/member/*"]
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        pytest.param("search", id="no leading slash"),
+        pytest.param("/billpay?x=1", id="a query"),
+        pytest.param("/billpay#top", id="a fragment"),
+        pytest.param("/member/**", id="a double star"),
+        pytest.param("/mem*", id="a star inside a segment"),
+        pytest.param("/billpay/", id="a trailing slash"),
+        pytest.param("//billpay", id="an empty segment"),
+        pytest.param("/bill pay", id="a space"),
+        pytest.param("/member/{member_id}", id="a placeholder"),
+        pytest.param("", id="empty"),
+    ],
+)
+def test_an_allowed_page_is_a_plain_path_pattern(pattern):
+    assert not valid_route_pattern(pattern)
+    with pytest.raises(ValidationError, match="entry 2 is not a page pattern"):
+        _artifact_allowing("/search", pattern)
+
+
+def test_allowed_pages_are_unique():
+    with pytest.raises(ValidationError, match="unique"):
+        _artifact_allowing("/search", "/search")
+
+
+def test_the_start_page_must_be_an_allowed_page():
+    with pytest.raises(ValidationError, match="start page"):
+        _artifact_allowing("/login", "/member/*")
 
 
 # --- option_value on dropdown steps ---

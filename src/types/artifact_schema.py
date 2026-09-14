@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
 import uuid
 import re
+from urllib.parse import urlparse
 from .placeholders import CREDENTIAL_PREFIX, find_placeholders, iter_placeholders
+from .routes import route_allowed, valid_route_pattern
 from .step_schema import ActionType, CheckpointType, Step
 
 _SIMPLE_NAME = r"^[a-z][a-z0-9_]*$"
@@ -178,6 +180,11 @@ class Artifact(BaseModel):
         description="Legitimate answers other than success, each with a stable code "
         "and how replay recognises it"
     )
+    allowed_paths: list[str] = Field(
+        default_factory=list,
+        description="The pages this capability may visit on the bank's host, as path patterns "
+        "('/member/*' is one segment); empty means any page on the host"
+    )
     steps: list[Step] = Field(min_length=1)
     global_assertions: list[GlobalAssertion] = Field(
         default_factory=list,
@@ -221,6 +228,20 @@ class Artifact(BaseModel):
         keys = [c.key for c in self.credentials]
         if len(keys) != len(set(keys)):
             raise ValueError("credentials keys must be unique")
+        return self
+
+    @model_validator(mode="after")
+    def validate_allowed_paths(self) -> "Artifact":
+        # Entries are named by position, not quoted: whatever was typed there stays out of errors.
+        for position, pattern in enumerate(self.allowed_paths, start=1):
+            if not valid_route_pattern(pattern):
+                raise ValueError(f"allowed_paths entry {position} is not a page pattern: "
+                                 "'/' or '/segment' parts, where a segment is text or '*'")
+        if len(self.allowed_paths) != len(set(self.allowed_paths)):
+            raise ValueError("allowed_paths entries must be unique")
+        start_path = urlparse(self.metadata.target_url).path or "/"
+        if self.allowed_paths and not route_allowed(start_path, self.allowed_paths):
+            raise ValueError("allowed_paths: the start page must be one of the allowed pages")
         return self
 
     @model_validator(mode="after")

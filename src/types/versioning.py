@@ -20,7 +20,7 @@ _VERSION = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
 
 # What the engineer declared: a change here is a major change.
 _CONTRACT_METADATA = ("capability", "description", "target_url", "tenant_override_url")
-_CONTRACT_GROUPS = ("input_parameters", "output_definitions", "credentials", "known_outcomes")
+_CONTRACT_GROUPS = ("input_parameters", "output_definitions", "credentials", "known_outcomes", "allowed_paths")
 # Every top-level field has a rule: the contract above, or the steps and final checks.
 _COMPARED = {"metadata", *_CONTRACT_GROUPS, "steps", "global_assertions"}
 # Metadata that says which file this is, not what the capability does.

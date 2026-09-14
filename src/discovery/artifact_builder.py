@@ -52,6 +52,8 @@ class ArtifactContract:
     credentials: list[CredentialDefinition]
     # The legitimate answers other than success; a capability may have none.
     known_outcomes: list[KnownOutcome] = field(default_factory=list)
+    # The pages it may visit, as path patterns; empty means any page on the bank's host.
+    allowed_paths: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,7 @@ def build_and_save(
             output_definitions=list(contract.output_definitions),
             credentials=list(contract.credentials),
             known_outcomes=list(contract.known_outcomes),
+            allowed_paths=list(contract.allowed_paths),
             steps=list(steps),
         )
     except ValidationError as error:
