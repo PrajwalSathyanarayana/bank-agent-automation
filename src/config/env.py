@@ -23,3 +23,12 @@ class Env(BaseSettings):
 
 
 env = Env()
+
+
+def configured_credentials() -> dict[str, str | SecretStr]:
+    """Credential values by the names artifacts use ({credential:bank_password}).
+
+    The one place a credential's name meets its .env variable; each bank's runtime
+    supplies its own values for the same artifact. Secrets stay SecretStr.
+    """
+    return {"bank_username": env.mock_bank_username, "bank_password": env.mock_bank_password}

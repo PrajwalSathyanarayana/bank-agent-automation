@@ -163,6 +163,14 @@ class RunLogger:
         """
         self._emit("SECRET_ON_PAGE", {"step_index": step_index, "secrets": secrets, "found_in": found_in})
 
+    def dialog_dismissed(self, dialog_type: str, message: str) -> None:
+        """A browser dialog nobody expected was dismissed: its type and wording.
+
+        The wording goes under dialog_message: "message" is a reserved attribute of
+        Python's log records, and logging refuses it as an extra field.
+        """
+        self._emit("DIALOG_DISMISSED", {"dialog_type": dialog_type, "dialog_message": message})
+
     def backstop_scan(
         self,
         outcome: str,

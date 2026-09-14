@@ -8,6 +8,7 @@ from playwright.async_api import async_playwright
 from werkzeug.serving import make_server
 
 from src.config.settings import settings
+from src.discovery.browser import launch_args
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mock_bank"))
 from app import create_app  # noqa: E402
@@ -20,9 +21,10 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    # A test that uses a browser page is a browser test; no test has to say so itself.
+    # A test that uses a browser page or the bank server is a browser test; no test has
+    # to say so itself.
     for item in items:
-        if "page" in item.fixturenames or "browser" in item.fixturenames:
+        if {"page", "browser", "mock_bank_url"} & set(item.fixturenames):
             item.add_marker(pytest.mark.browser)
 
 
@@ -44,14 +46,12 @@ def mock_bank_url():
 
 
 @pytest.fixture(scope="session")
-async def browser():
+async def browser(mock_bank_url):
     async with async_playwright() as playwright:
-        # The test server listens on IPv4 only; without this rule Chromium tries
-        # ::1 first and waits ~0.3-0.5 s per request before falling back.
-        # URLs still say localhost, so the real allowlist is exercised.
-        browser = await playwright.chromium.launch(
-            args=["--host-resolver-rules=MAP localhost 127.0.0.1"]
-        )
+        # The same start-up flags as the discovery browser: the localhost rule avoids
+        # Chromium's IPv6-first delay. URLs still say localhost, so the real allowlist
+        # is exercised.
+        browser = await playwright.chromium.launch(args=launch_args(mock_bank_url))
         yield browser
         await browser.close()
 

@@ -23,7 +23,7 @@ from src.types.artifact_schema import (
     OutputParamDefinition,
     ParamType,
 )
-from src.types.placeholders import find_placeholders, iter_placeholders
+from src.types.placeholders import MissingValue, fill_text, find_placeholders, iter_placeholders
 from src.types.result_schema import (
     EvidencePaths,
     ExecutionResult,
@@ -603,6 +603,17 @@ def _artifact_with(step: Step, description: str = "Read the member's savings bal
 def test_step_has_no_separate_input_parameter_field():
     # Placeholders in the text are the only way a step refers to an input.
     assert "input_parameter" not in Step.model_fields
+
+
+def test_fill_text_fills_placeholders_and_makes_doubled_braces_single():
+    values = {"amount": "50", "payee_name": "Sunbelt Electric Co", "credential:bank_password": "x"}
+    assert fill_text("Pay {amount} to {payee_name} {{ref}}", values) == "Pay 50 to Sunbelt Electric Co {ref}"
+    assert fill_text("{credential:bank_password}", values) == "x"
+
+
+def test_fill_text_names_a_placeholder_with_no_value():
+    with pytest.raises(MissingValue, match=r"\{member_id\}"):
+        fill_text("Member {member_id}", {})
 
 
 def test_iter_placeholders_reports_positions():

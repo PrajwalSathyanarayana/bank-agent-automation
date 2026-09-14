@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import json
 import math
@@ -11,8 +12,19 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import expect
 from pydantic import SecretStr
 
-from src.config.env import env
+from src.config.env import configured_credentials, env
 from src.config.settings import settings
+from src.discovery.browser import (
+    ActionFailed,
+    BrowserSession,
+    action_timeout_ms,
+    dismiss_dialogs,
+    launch_args,
+    number_text,
+    placeholder_values,
+    select_option,
+    type_text,
+)
 from src.discovery.locators import (
     Candidate,
     NoProvenLocator,
@@ -84,7 +96,7 @@ from src.discovery.perception import (
     observe,
     observing,
 )
-from src.safety.allowlist import check_domain
+from src.safety.allowlist import AllowlistViolation, check_domain
 
 
 async def _sign_in(page) -> None:
@@ -2153,3 +2165,86 @@ def test_a_capability_that_is_not_a_simple_name_is_never_used_as_a_folder(storag
     with pytest.raises(ValueError, match="simple lowercase name"):
         write_artifact(sign(escaping, env.artifact_signing_key))
     assert not storage.exists()
+
+
+# --- browser: the session and the functions that act on the page ---
+
+@pytest.mark.parametrize(
+    "base_url, args",
+    [pytest.param("http://localhost:5000", ["--host-resolver-rules=MAP localhost 127.0.0.1"], id="localhost"),
+     pytest.param("http://127.0.0.1:5000", [], id="an IP address"),
+     pytest.param("https://portal.examplebank.com", [], id="a real bank")],
+)
+def test_the_localhost_rule_applies_only_to_a_localhost_bank(base_url, args):
+    assert launch_args(base_url) == args
+
+
+@pytest.mark.parametrize("number, typed", [(50.0, "50"), (512.75, "512.75"), (1240.5, "1240.5"), (0.1, "0.1")])
+def test_a_number_is_typed_in_its_plain_shortest_form(number, typed):
+    assert number_text(number) == typed
+
+
+@pytest.mark.parametrize("time_left, cap", [(120_000, 30_000), (5_000, 5_000), (0, 1)])
+def test_an_action_gets_thirty_seconds_or_what_is_left(time_left, cap):
+    assert action_timeout_ms(time_left) == cap
+
+
+def test_placeholder_values_name_credentials_as_artifacts_do_and_keep_secrets_wrapped():
+    values = placeholder_values({"member_id": "10234"}, {"amount": 50.0}, configured_credentials())
+    assert (values["member_id"], values["amount"]) == ("10234", "50")
+    assert values["credential:bank_username"] == env.mock_bank_username
+    assert isinstance(values["credential:bank_password"], SecretStr)
+
+
+BROWSER_VALUES = placeholder_values({"member_id": "10234", "payee_name": "Sunbelt Electric Co"}, {"amount": 50.0},
+                                    {"bank_password": SecretStr(FAKE_PASSWORD)})
+
+
+@pytest.mark.anyio
+async def test_typing_fills_placeholders_and_the_secret_only_at_the_keystroke(page):
+    await page.set_content('<input id="m" type="text"><input id="p" type="password">')
+    await type_text(await page.query_selector("#m"), "{member_id}", BROWSER_VALUES, timeout_ms=5_000)
+    await type_text(await page.query_selector("#p"), "{credential:bank_password}", BROWSER_VALUES, timeout_ms=5_000)
+    assert await page.input_value("#m") == "10234"
+    assert await page.input_value("#p") == FAKE_PASSWORD
+
+
+@pytest.mark.anyio
+async def test_a_failed_keystroke_never_carries_the_value(page):
+    await page.set_content('<input id="p" type="password">')
+    box = await page.query_selector("#p")
+    await page.evaluate("document.getElementById('p').remove()")
+    with pytest.raises(ActionFailed) as failure:
+        await type_text(box, "{credential:bank_password}", BROWSER_VALUES, timeout_ms=1_000)
+    assert FAKE_PASSWORD not in str(failure.value)
+    assert (failure.value.__cause__, failure.value.__context__) == (None, None)
+
+
+@pytest.mark.anyio
+async def test_an_option_is_chosen_by_its_label_with_the_input_filled(page):
+    await page.set_content(f"{QUIRKS_DOCTYPE}<html><body>{PAYEE_SELECT}</body></html>")
+    await select_option(await page.query_selector("select"), "{payee_name}", BROWSER_VALUES, timeout_ms=5_000)
+    assert await page.eval_on_selector("select", "select => select.value") == "P001"
+
+
+@pytest.mark.anyio
+async def test_a_dialog_nobody_expected_is_dismissed_and_noted(page, run_logger):
+    notes = dismiss_dialogs(page, run_logger)
+    # A dialog left open stalls the page, so a regression must fail here, not hang.
+    assert await asyncio.wait_for(page.evaluate("confirm('Submit this payment?')"), timeout=10) is False
+    assert notes == ["confirm: Submit this payment?"]
+    line = _log_lines(run_logger)[-1]
+    assert (line["event_type"], line["dialog_type"], line["dialog_message"]) == (
+        "DIALOG_DISMISSED", "confirm", "Submit this payment?")
+
+
+@pytest.mark.anyio
+async def test_the_session_opens_an_allowed_start_page_and_refuses_another(mock_bank_url, run_logger):
+    async with BrowserSession(run_logger) as session:
+        await session.open(f"{mock_bank_url}/login", timeout_ms=10_000)
+        assert session.page.url.endswith("/login")
+        assert session.page.viewport_size == {"width": settings.discovery_viewport_width,
+                                              "height": settings.discovery_viewport_height}
+        with pytest.raises(AllowlistViolation):
+            await session.open("https://example.com/", timeout_ms=1_000)
+        assert session.page.url.endswith("/login")
