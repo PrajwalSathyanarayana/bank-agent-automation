@@ -526,6 +526,8 @@ class _Discovery:
         self._logger.execution_ended(status.value, error.code if error else None, error.message if error else None)
         self._logger.summary_metrics(duration_ms, len(self._recorder.steps), self._retries, 0)
         return ExecutionResult(
+            # The run log's trace id, so a result leads straight to its log lines.
+            run_id=self._logger.trace_id,
             capability=self._contract.capability,
             artifact_version=artifact_version,
             mode="DISCOVERY",

@@ -2257,17 +2257,22 @@ def test_a_contract_whose_start_page_is_not_allowed_is_not_saved(storage, run_lo
     assert not storage.exists()
 
 
-def _ab_recording(description="Enter member 10234", extra_step=False, outcomes=()):
+def _ab_recording(description="Enter member 10234", locator="#s1", extra_step=False, outcomes=()):
     # A contract and its recording; the defaults make the same recording every time.
-    steps = [_ab_start(), _bs_step(1, ActionType.TYPE, description, "10234")]
+    steps = [_ab_start(), _bs_step(1, ActionType.TYPE, description, "10234", locators=_bs_locators(locator))]
     if extra_step:
         steps.append(_bs_step(2, ActionType.ASSERT_TEXT, "Check the amount", "Amount: $50.00"))
     return dataclasses.replace(_ab_contract(), known_outcomes=list(outcomes)), steps
 
 
-def test_a_rediscovery_with_nothing_changed_writes_no_new_version(storage, run_logger):
+@pytest.mark.parametrize(
+    "description",
+    [pytest.param("Enter member 10234", id="same wording"),
+     pytest.param("Type the member ID 10234 into the search box", id="only the model's wording differs")],
+)
+def test_a_rediscovery_with_nothing_changed_writes_no_new_version(storage, run_logger, description):
     first = build_and_save(*_ab_recording(), _bs_inputs(), run_logger)
-    again = build_and_save(*_ab_recording(), _bs_inputs(), run_logger)
+    again = build_and_save(*_ab_recording(description=description), _bs_inputs(), run_logger)
     assert (again.path, again.artifact.metadata.version) == (first.path, "1.0.0")
     assert list(first.path.parent.iterdir()) == [first.path]
     last = _log_lines(run_logger)[-1]
@@ -2278,7 +2283,7 @@ def test_a_rediscovery_with_nothing_changed_writes_no_new_version(storage, run_l
 @pytest.mark.parametrize(
     "changes, expected",
     [
-        pytest.param({"description": "Type member 10234"}, "1.0.1", id="wording only: patch"),
+        pytest.param({"locator": "input[name='member_id']"}, "1.0.1", id="a locator only: patch"),
         pytest.param({"extra_step": True}, "1.1.0", id="an extra step: minor"),
         pytest.param({"outcomes": BILL_PAY_OUTCOMES}, "2.0.0", id="a new known outcome: major"),
     ],
@@ -2887,6 +2892,15 @@ async def test_a_production_run_is_not_held_to_this_machine(monkeypatch, run_log
     request = DiscoveryRequest(dataclasses.replace(_ab_contract(), target_url=REMOTE_BANK), RUN_VALUES)
     with pytest.raises(_BrowserReached):
         await discover(request, ScriptedModel(), run_logger, sandbox=False)
+
+
+@pytest.mark.anyio
+async def test_a_result_carries_the_trace_id_of_its_run_log(monkeypatch, storage, run_logger):
+    _browser_trap(monkeypatch)
+    request = DiscoveryRequest(dataclasses.replace(_ab_contract(), target_url=REMOTE_BANK), RUN_VALUES)
+    result = await discover(request, ScriptedModel(), run_logger, sandbox=True)
+    assert result.run_id == run_logger.trace_id
+    assert {line["trace_id"] for line in _log_lines(run_logger)} == {result.run_id}
 
 
 BILL_PAY_PAGES = ["/login", "/dashboard", "/search", "/member/*", "/member/*/accounts", "/billpay", "/billpay/confirm"]
