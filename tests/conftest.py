@@ -14,6 +14,18 @@ from app import create_app  # noqa: E402
 import blueprints.member as member_routes  # noqa: E402
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "browser: drives a real Chromium page against the in-process mock bank")
+    config.addinivalue_line("markers", "llm: calls the real model; costs money, run only on purpose")
+
+
+def pytest_collection_modifyitems(config, items):
+    # A test that uses a browser page is a browser test; no test has to say so itself.
+    for item in items:
+        if "page" in item.fixturenames or "browser" in item.fixturenames:
+            item.add_marker(pytest.mark.browser)
+
+
 @pytest.fixture(scope="session")
 def anyio_backend():
     # Session scope lets one event loop, and so one browser, serve every test.
