@@ -5,7 +5,9 @@ the next version, bumped by what changed against the latest one:
 - major: the contract — what the capability takes, returns and can answer, and where it
   starts. A calling agent must not assume the new version behaves like the old;
 - minor: the flow — the sequence of actions, their risk, what they type or read;
-- patch: only details — locators, checks, the model's wording.
+- patch: only details — how steps find their elements and check the page.
+The model's wording of a step (its description) is not a change: two runs of the same
+flow phrase their steps differently, and a new version for that would be noise.
 Versions only go up, so no two saves of a capability share one.
 """
 import re
@@ -26,8 +28,8 @@ _COMPARED = {"metadata", *_CONTRACT_GROUPS, "steps", "global_assertions"}
 # Metadata that says which file this is, not what the capability does.
 _METADATA_IDENTITY = {"artifact_id", "version", "integrity_hash", "author",
                       "created_timestamp", "last_updated_timestamp"}
-# New on every save; they say nothing about behaviour.
-_GENERATED_IDS = {"step_id", "checkpoint_id", "assertion_id"}
+# New on every save, or the model's wording of a step: neither says anything about behaviour.
+_IGNORED = {"step_id", "checkpoint_id", "assertion_id", "description"}
 
 
 class Change(str, Enum):
@@ -67,8 +69,9 @@ def bump(version: Version, change: Change) -> Version:
 
 
 def change_between(old: Artifact, new: Artifact) -> Change:
-    """The largest kind of change from old to new. Generated ids, timestamps, the version
-    and the signature are ignored: two recordings of the same flow are Change.NONE.
+    """The largest kind of change from old to new. Generated ids, the model's step wording,
+    timestamps, the version and the signature are ignored: two recordings of the same
+    flow are Change.NONE.
 
     Raises UnruledField for a field the rules don't cover, so a field added to the schema
     later can't slip through as "no change".
@@ -103,12 +106,12 @@ def _flow(artifact: Artifact) -> list[tuple[Any, ...]]:
 
 
 def _details(artifact: Artifact) -> Any:
-    return _without_ids(artifact.model_dump(mode="json", include={"steps", "global_assertions"}))
+    return _behaviour_only(artifact.model_dump(mode="json", include={"steps", "global_assertions"}))
 
 
-def _without_ids(node: Any) -> Any:
+def _behaviour_only(node: Any) -> Any:
     if isinstance(node, dict):
-        return {key: _without_ids(value) for key, value in node.items() if key not in _GENERATED_IDS}
+        return {key: _behaviour_only(value) for key, value in node.items() if key not in _IGNORED}
     if isinstance(node, list):
-        return [_without_ids(value) for value in node]
+        return [_behaviour_only(value) for value in node]
     return node

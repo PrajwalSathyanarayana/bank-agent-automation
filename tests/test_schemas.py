@@ -616,7 +616,8 @@ def _set(path, value):
         pytest.param(_set(("metadata", "version"), "1.4.2"), Change.NONE, id="version is not content"),
         pytest.param(_set(("steps", 1, "locators", 0, "value"), "input[name='member']"), Change.PATCH,
                      id="a locator"),
-        pytest.param(_set(("steps", 1, "description"), "Enter the member ID"), Change.PATCH, id="wording"),
+        pytest.param(_set(("steps", 1, "description"), "Enter the member ID"), Change.NONE,
+                     id="the model's wording is not a change"),
         pytest.param(_set(("steps", 1, "checkpoints", 0, "expected_value"), "/search/go"), Change.PATCH,
                      id="a check"),
         pytest.param(_set(("steps", 1, "safety_tier"), "RISKY"), Change.MINOR, id="a step's risk"),
@@ -642,7 +643,7 @@ def test_a_new_recording_is_a_change_of_the_largest_kind_it_contains(edit, expec
 
 def test_a_contract_change_outranks_a_detail_change():
     old, new = _recording(), _recording()
-    _set(("steps", 1, "description"), "Enter the member ID")(new)
+    _set(("steps", 1, "locators", 0, "value"), "input[name='member']")(new)
     _set(("metadata", "target_url"), "http://localhost:5000/login")(new)
     assert change_between(Artifact.model_validate(old), Artifact.model_validate(new)) == Change.MAJOR
 
