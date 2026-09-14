@@ -74,6 +74,10 @@ SKIPPED_FIELDS: frozenset[Path] = frozenset({
     ("credentials", "*", "kind"),
     ("output_definitions", "*", "key"),
     ("output_definitions", "*", "type"),
+    ("output_definitions", "*", "currency"),
+    ("known_outcomes", "*", "code"),
+    ("known_outcomes", "*", "signal"),
+    ("known_outcomes", "*", "input_key"),
     ("steps", "*", "step_id"),
     ("steps", "*", "action"),
     ("steps", "*", "safety_tier"),
@@ -118,6 +122,9 @@ def artifact_fields(artifact: Artifact) -> list[ScannedField]:
             add((group, position, "description"), FieldKind.CONTRACT, definition.description)
     for position, parameter in enumerate(artifact.input_parameters):
         add(("input_parameters", position, "example_value"), FieldKind.CONTRACT, parameter.example_value)
+    for position, outcome in enumerate(artifact.known_outcomes):
+        add(("known_outcomes", position, "description"), FieldKind.CONTRACT, outcome.description)
+        add(("known_outcomes", position, "text"), FieldKind.CONTRACT, outcome.text)
 
     for position, step in enumerate(artifact.steps):
         at: Path = ("steps", position)
@@ -366,7 +373,8 @@ _SEVERITY = {
 # number there is a place on the page, never an amount.
 _POSITION_SYNTAX = re.compile(r":nth-of-type\(\d+\)|\[\d+\]")
 
-_DEFINITION_WORDS = {"input_parameters": "input", "credentials": "credential", "output_definitions": "output"}
+_DEFINITION_WORDS = {"input_parameters": "input", "credentials": "credential", "output_definitions": "output",
+                     "known_outcomes": "known outcome"}
 # Checks that hold text; a next-step check stores none, so it never reaches a message.
 _CHECK_WORDS = {
     CheckpointType.PAGE_PATH: "page path check",
@@ -498,8 +506,10 @@ def _where(field: ScannedField, artifact: Artifact) -> str:
     if group == "global_assertions":
         return f"final check {rest[0]}"
     position, name = rest
-    key = getattr(artifact, str(group))[position].key
-    return f"{_DEFINITION_WORDS[str(group)]} {key} {str(name).replace('_', ' ')}"
+    entry = getattr(artifact, str(group))[position]
+    # A known outcome is named by its code; every other definition by its key.
+    label = entry.code if group == "known_outcomes" else entry.key
+    return f"{_DEFINITION_WORDS[str(group)]} {label} {str(name).replace('_', ' ')}"
 
 
 def _step_part(field: ScannedField, step: Step) -> str:

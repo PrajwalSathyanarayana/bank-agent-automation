@@ -20,7 +20,10 @@ from src.types.artifact_schema import (
     GlobalAssertion,
     GlobalAssertionType,
     InputParamDefinition,
+    KnownOutcome,
+    OutcomeSignal,
     OutputParamDefinition,
+    OutputType,
     ParamType,
 )
 from src.types.placeholders import MissingValue, fill_text, find_placeholders, iter_placeholders
@@ -395,7 +398,7 @@ def test_artifact_with_matching_output_definition_and_extract_step_constructs():
     artifact = Artifact(
         metadata=_valid_metadata(),
         output_definitions=[
-            OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Savings balance")
+            OutputParamDefinition(key="balance", type=OutputType.NUMBER, description="Savings balance")
         ],
         steps=[_valid_step(), _extract_step(output_key="balance")],
     )
@@ -407,7 +410,7 @@ def test_artifact_rejects_orphan_output_definition():
         Artifact(
             metadata=_valid_metadata(),
             output_definitions=[
-                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Savings balance")
+                OutputParamDefinition(key="balance", type=OutputType.NUMBER, description="Savings balance")
             ],
             steps=[_valid_step()],  # no EXTRACT_TEXT step produces "balance"
         )
@@ -427,8 +430,8 @@ def test_artifact_rejects_duplicate_output_definition_keys():
         Artifact(
             metadata=_valid_metadata(),
             output_definitions=[
-                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="First"),
-                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Duplicate"),
+                OutputParamDefinition(key="balance", type=OutputType.NUMBER, description="First"),
+                OutputParamDefinition(key="balance", type=OutputType.NUMBER, description="Duplicate"),
             ],
             steps=[_extract_step(output_key="balance")],
         )
@@ -439,13 +442,100 @@ def test_artifact_rejects_two_steps_producing_same_output_key():
         Artifact(
             metadata=_valid_metadata(),
             output_definitions=[
-                OutputParamDefinition(key="balance", type=ParamType.NUMBER, description="Savings balance")
+                OutputParamDefinition(key="balance", type=OutputType.NUMBER, description="Savings balance")
             ],
             steps=[
                 _extract_step(output_key="balance", sequence_index=1),
                 _extract_step(output_key="balance", sequence_index=2),
             ],
         )
+
+
+# --- output types ---
+
+def _money(**overrides) -> OutputParamDefinition:
+    fields = {"key": "balance", "type": OutputType.MONEY, "description": "Checking balance", "currency": "USD"}
+    return OutputParamDefinition(**{**fields, **overrides})
+
+
+def test_a_money_output_carries_its_currency():
+    assert _money().currency == "USD"
+
+
+@pytest.mark.parametrize("overrides", [
+    pytest.param({"currency": None}, id="money without a currency"),
+    pytest.param({"currency": "usd"}, id="currency not in capitals"),
+    pytest.param({"currency": "US$"}, id="currency not a three-letter code"),
+    pytest.param({"type": OutputType.NUMBER}, id="currency on a number"),
+    pytest.param({"type": OutputType.STRING}, id="currency on text"),
+])
+def test_only_a_money_output_has_a_currency_and_it_always_does(overrides):
+    with pytest.raises(ValidationError):
+        _money(**overrides)
+
+
+@pytest.mark.parametrize("output_type", ["secret", "boolean"])
+def test_an_output_is_never_a_secret_or_a_boolean(output_type):
+    with pytest.raises(ValidationError):
+        OutputParamDefinition(key="balance", type=output_type, description="Balance")
+
+
+# --- known outcomes ---
+
+PAYEE_MISSING = {"code": "PAYEE_NOT_FOUND", "signal": OutcomeSignal.NO_SUCH_OPTION, "text": None,
+                 "input_key": "payee_name"}
+
+
+def _outcome(**overrides) -> KnownOutcome:
+    fields = {"code": "MEMBER_NOT_FOUND", "description": "No member has this ID",
+              "signal": OutcomeSignal.PAGE_TEXT, "text": "No member found with that ID."}
+    return KnownOutcome(**{**fields, **overrides})
+
+
+def _artifact_with_outcomes(*outcomes) -> Artifact:
+    return Artifact(
+        metadata=_valid_metadata(),
+        input_parameters=[InputParamDefinition(key="payee_name", type=ParamType.STRING, description="Payee")],
+        known_outcomes=list(outcomes),
+        steps=[_valid_step()],
+    )
+
+
+def test_an_artifact_declares_its_known_outcomes_and_keeps_them_through_json():
+    artifact = _artifact_with_outcomes(_outcome(), _outcome(**PAYEE_MISSING))
+    assert [outcome.code for outcome in artifact.known_outcomes] == ["MEMBER_NOT_FOUND", "PAYEE_NOT_FOUND"]
+    assert Artifact.model_validate_json(artifact.model_dump_json()) == artifact
+
+
+@pytest.mark.parametrize("overrides", [
+    pytest.param({"text": None}, id="page text without the text"),
+    pytest.param({"text": "   "}, id="page text that is only spaces"),
+    pytest.param({"input_key": "payee_name"}, id="page text with an input"),
+    pytest.param({"text": "No member {member_id}"}, id="placeholder in the text"),
+    pytest.param({**PAYEE_MISSING, "input_key": None}, id="missing option without the input"),
+    pytest.param({**PAYEE_MISSING, "text": "Payee missing"}, id="missing option with text"),
+    pytest.param({"code": "member_not_found"}, id="code not in capitals"),
+    pytest.param({"description": ""}, id="no description"),
+])
+def test_a_known_outcome_says_exactly_how_it_is_recognised(overrides):
+    with pytest.raises(ValidationError):
+        _outcome(**overrides)
+
+
+def test_known_outcome_codes_are_unique():
+    with pytest.raises(ValidationError, match="unique"):
+        _artifact_with_outcomes(_outcome(), _outcome(description="The same code again"))
+
+
+def test_a_missing_option_names_a_declared_input():
+    with pytest.raises(ValidationError, match="not a declared input"):
+        _artifact_with_outcomes(_outcome(**{**PAYEE_MISSING, "input_key": "payee"}))
+
+
+def test_an_artifact_saved_before_known_outcomes_existed_still_loads():
+    data = _artifact_with_outcomes().model_dump(mode="json")
+    del data["known_outcomes"]
+    assert Artifact.model_validate(data).known_outcomes == []
 
 
 # --- option_value on dropdown steps ---

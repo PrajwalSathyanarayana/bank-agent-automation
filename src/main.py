@@ -23,6 +23,7 @@ from src.types.artifact_schema import (
     CredentialKind,
     InputParamDefinition,
     OutputParamDefinition,
+    OutputType,
     ParamType,
 )
 from src.types.result_schema import ExecutionStatus
@@ -43,9 +44,9 @@ CONTRACTS = {
             InputParamDefinition(key="payee_name", type=ParamType.STRING, description="Payee, as named in the payee list"),
         ],
         output_definitions=[
-            OutputParamDefinition(key="checking_balance_before", type=ParamType.STRING,
+            OutputParamDefinition(key="checking_balance_before", type=OutputType.STRING,
                                   description="The member's checking balance as shown before paying"),
-            OutputParamDefinition(key="new_checking_balance", type=ParamType.STRING,
+            OutputParamDefinition(key="new_checking_balance", type=OutputType.STRING,
                                   description="The checking balance shown on the receipt after paying"),
         ],
         credentials=[

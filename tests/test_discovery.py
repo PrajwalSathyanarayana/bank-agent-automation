@@ -86,7 +86,10 @@ from src.types.artifact_schema import (
     GlobalAssertion,
     GlobalAssertionType,
     InputParamDefinition,
+    KnownOutcome,
+    OutcomeSignal,
     OutputParamDefinition,
+    OutputType,
     ParamType,
 )
 from src.types.result_schema import ExecutionStatus, HandoffResolution
@@ -1898,6 +1901,40 @@ def test_an_input_value_on_a_click_has_no_treatment():
         artifact_fields(_bs_artifact(_bs_step(1, ActionType.CLICK, "Go", "hello")))
 
 
+def test_known_outcomes_and_currencies_are_read_as_the_engineers_contract():
+    # model_copy skips validation: only which fields exist matters here, not whether a
+    # step reads the output.
+    artifact = _bs_artifact().model_copy(update={
+        "output_definitions": [OutputParamDefinition(key="balance", type=OutputType.MONEY,
+                                                     description="Checking balance", currency="USD")],
+        "known_outcomes": [
+            KnownOutcome(code="MEMBER_NOT_FOUND", description="No member has this ID",
+                         signal=OutcomeSignal.PAGE_TEXT, text="No member found with that ID."),
+            KnownOutcome(code="PAYEE_NOT_FOUND", description="The payee isn't in the list",
+                         signal=OutcomeSignal.NO_SUCH_OPTION, input_key="payee_name"),
+        ],
+    })
+    kinds = {"/".join(map(str, field.path)): field.kind for field in artifact_fields(artifact)}
+    assert {
+        "output_definitions/0/description": FieldKind.CONTRACT,
+        "known_outcomes/0/description": FieldKind.CONTRACT,
+        "known_outcomes/0/text": FieldKind.CONTRACT,
+        "known_outcomes/1/description": FieldKind.CONTRACT,
+    }.items() <= kinds.items()
+    assert not [path for path in kinds if path.endswith(("/code", "/signal", "/input_key", "/currency"))]
+
+
+def test_a_secret_in_a_known_outcome_stops_the_save_and_names_the_outcome():
+    inputs = _bs_inputs()
+    data = _bs_artifact().model_dump(mode="json")
+    data["known_outcomes"] = [{"code": "LOCKED", "description": "The account is locked", "signal": "page_text",
+                               "text": f"Password {FAKE_PASSWORD} is locked"}]
+    [finding] = find_problems(convert(Artifact.model_validate(data), inputs), inputs)
+    assert finding.code == AbortCode.SECRET_LITERAL
+    assert "known outcome LOCKED text" in finding.message
+    assert FAKE_PASSWORD not in finding.message
+
+
 # Converting this run's values
 
 @pytest.mark.parametrize(
@@ -2149,7 +2186,7 @@ def test_a_clean_recording_is_saved_signed_and_logged(storage, run_logger):
 def test_an_invalid_recording_is_not_saved_and_its_message_shows_no_value(storage, run_logger):
     # A declared output no step reads, and a secret typed as a literal that must not be echoed.
     steps = [_ab_start(), _bs_step(1, ActionType.TYPE, "Type it", FAKE_PASSWORD)]
-    outputs = [OutputParamDefinition(key="checking_balance", type=ParamType.STRING, description="Balance")]
+    outputs = [OutputParamDefinition(key="checking_balance", type=OutputType.STRING, description="Balance")]
     result = build_and_save(_ab_contract(outputs), steps, _bs_inputs(), run_logger)
     assert result.error.code == "ARTIFACT_INVALID"
     assert "checking_balance" in result.error.message
@@ -2314,7 +2351,7 @@ def test_extract_text_is_offered_only_when_outputs_are_declared():
 
 
 def test_the_goal_message_gives_placeholders_and_values_but_credentials_by_name_only():
-    contract = _ab_contract([OutputParamDefinition(key="checking_balance", type=ParamType.STRING,
+    contract = _ab_contract([OutputParamDefinition(key="checking_balance", type=OutputType.STRING,
                                                    description="Checking balance before paying")])
     text = goal_message("For member 10234, pay 50 to Sunbelt Electric Co.", contract.input_parameters,
                         {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"},
@@ -2405,7 +2442,7 @@ TO_CONFIRM_PAGE = [
     ("assert_visible", {"expected_text": "Amount:", "reason": "Check the confirmation page"}),
 ]
 CONFIRM = ("click", {"element": 'button "Confirm Payment"', "reason": "Submit it"})
-BALANCE_OUTPUT = OutputParamDefinition(key="checking_balance_before", type=ParamType.STRING,
+BALANCE_OUTPUT = OutputParamDefinition(key="checking_balance_before", type=OutputType.STRING,
                                        description="Checking balance before paying")
 
 
@@ -2689,7 +2726,7 @@ async def test_a_production_run_is_not_held_to_this_machine(monkeypatch, run_log
 
 # Kept last in the file: this test really pays in the shared test bank, which changes the
 # member's balance for anything that runs after it in the same session.
-NEW_BALANCE_OUTPUT = OutputParamDefinition(key="new_checking_balance", type=ParamType.STRING,
+NEW_BALANCE_OUTPUT = OutputParamDefinition(key="new_checking_balance", type=OutputType.STRING,
                                            description="Checking balance after paying")
 
 

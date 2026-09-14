@@ -28,10 +28,61 @@ class InputParamDefinition(BaseModel):
     example_value: Optional[str] = None
 
 
+class OutputType(str, Enum):
+    """What an output holds when the caller receives it. An output is never a secret."""
+
+    STRING = "string"
+    NUMBER = "number"
+    # An exact amount, returned as plain decimal text ("2450.32") in the output's currency,
+    # never as a floating-point number.
+    MONEY = "money"
+
+
 class OutputParamDefinition(BaseModel):
     key: str = Field(min_length=1)
-    type: ParamType
+    type: OutputType
     description: str = Field(min_length=1)
+    # ISO 4217 code such as "USD": required for money, allowed nowhere else.
+    currency: Optional[str] = Field(default=None, pattern=r"^[A-Z]{3}$")
+
+    @model_validator(mode="after")
+    def validate_currency(self) -> "OutputParamDefinition":
+        if (self.type == OutputType.MONEY) != (self.currency is not None):
+            raise ValueError(f"output {self.key}: a money output needs a currency, and only a money output has one")
+        return self
+
+
+class OutcomeSignal(str, Enum):
+    """How replay recognises a known outcome."""
+
+    # The page shows this text: the whole phrase, in any case, visible.
+    PAGE_TEXT = "page_text"
+    # A dropdown offers no option for this input's value (a payee the member doesn't have).
+    NO_SUCH_OPTION = "no_such_option"
+
+
+class KnownOutcome(BaseModel):
+    """A legitimate answer other than success, declared by the engineer with a stable code
+    the caller can branch on ("no such member" is an answer, not a crash)."""
+
+    code: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
+    description: str = Field(min_length=1)
+    signal: OutcomeSignal
+    # For page_text: the phrase, matched as written.
+    text: Optional[str] = None
+    # For no_such_option: the input whose value the dropdown doesn't offer.
+    input_key: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_signal_fields(self) -> "KnownOutcome":
+        if self.signal == OutcomeSignal.PAGE_TEXT:
+            if not (self.text and self.text.strip()) or self.input_key is not None:
+                raise ValueError(f"outcome {self.code}: page_text needs the text to look for, and no input_key")
+            if find_placeholders(self.text):
+                raise ValueError(f"outcome {self.code}: the text is matched as written; placeholders are not allowed")
+        elif self.input_key is None or self.text is not None:
+            raise ValueError(f"outcome {self.code}: no_such_option needs the input_key, and no text")
+        return self
 
 
 class CredentialKind(str, Enum):
@@ -122,6 +173,11 @@ class Artifact(BaseModel):
         default_factory=list,
         description="Typed outputs this capability returns to the calling agent"
     )
+    known_outcomes: list[KnownOutcome] = Field(
+        default_factory=list,
+        description="Legitimate answers other than success, each with a stable code "
+        "and how replay recognises it"
+    )
     steps: list[Step] = Field(min_length=1)
     global_assertions: list[GlobalAssertion] = Field(
         default_factory=list,
@@ -165,6 +221,17 @@ class Artifact(BaseModel):
         keys = [c.key for c in self.credentials]
         if len(keys) != len(set(keys)):
             raise ValueError("credentials keys must be unique")
+        return self
+
+    @model_validator(mode="after")
+    def validate_known_outcomes(self) -> "Artifact":
+        codes = [outcome.code for outcome in self.known_outcomes]
+        if len(codes) != len(set(codes)):
+            raise ValueError("known_outcomes codes must be unique")
+        inputs = {p.key for p in self.input_parameters}
+        for outcome in self.known_outcomes:
+            if outcome.input_key is not None and outcome.input_key not in inputs:
+                raise ValueError(f"outcome {outcome.code}: {outcome.input_key} is not a declared input")
         return self
 
     @model_validator(mode="after")
