@@ -163,6 +163,35 @@ class RunLogger:
         """
         self._emit("SECRET_ON_PAGE", {"step_index": step_index, "secrets": secrets, "found_in": found_in})
 
+    def backstop_scan(
+        self,
+        outcome: str,
+        conversions: list[dict],
+        option_values_dropped: list[int],
+        literals_kept: list[dict],
+        assertions_recorded: list[dict],
+        flagged_assertions: list[dict],
+        findings: list[dict],
+    ) -> None:
+        """Discovery: the save-time scan's whole report, one line per save, on pass and on abort.
+
+        Conversions say what replaced a value, never the value; findings never carry one.
+        Literals kept and assertions recorded are shown for review; the scan has already
+        left out any field with a finding.
+        """
+        self._emit(
+            "BACKSTOP_SCAN",
+            {
+                "outcome": outcome,
+                "conversions": conversions,
+                "option_values_dropped": option_values_dropped,
+                "literals_kept": literals_kept,
+                "assertions_recorded": assertions_recorded,
+                "flagged_assertions": flagged_assertions,
+                "findings": findings,
+            },
+        )
+
     def summary_metrics(
         self, duration_ms: int, step_count: int, retry_count: int, human_interventions: int
     ) -> None:

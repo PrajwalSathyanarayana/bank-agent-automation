@@ -23,14 +23,26 @@ _PHONE_RE = re.compile(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,16}\b")
 
-_TEXT_PATTERNS = [_EMAIL_RE, _PHONE_RE, _SSN_RE, _CARD_RE]
+# Named, so a finding can say what a value looks like without showing it. Shared with
+# the save-time artifact scan, so logs and artifacts agree on what looks sensitive.
+SENSITIVE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "email address": _EMAIL_RE,
+    "phone number": _PHONE_RE,
+    "SSN": _SSN_RE,
+    "card number": _CARD_RE,
+}
 
 
 def redact_text(text: str) -> str:
     redacted = text
-    for pattern in _TEXT_PATTERNS:
+    for pattern in SENSITIVE_PATTERNS.values():
         redacted = pattern.sub(REDACTED, redacted)
     return redacted
+
+
+def sensitive_patterns_in(text: str) -> list[str]:
+    """The names of the sensitive-looking patterns found in the text, never what matched."""
+    return [name for name, pattern in SENSITIVE_PATTERNS.items() if pattern.search(text)]
 
 
 def _is_sensitive_key(key: str) -> bool:

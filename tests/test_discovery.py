@@ -26,6 +26,19 @@ from src.discovery.locators import (
     prove,
     scan,
 )
+from src.discovery import backstop
+from src.discovery.backstop import (
+    AbortCode,
+    FieldKind,
+    ScanInputs,
+    UnclassifiedField,
+    abort_error,
+    artifact_fields,
+    convert,
+    find_problems,
+    flag_assertions,
+    scan_artifact,
+)
 from src.discovery.recorder import Action, AssertionRefused, Recorder, RecordingError, TypingRefused
 from src.locating.checks import element_wording, shows_phrase
 from src.locating.resolver import resolve
@@ -36,10 +49,12 @@ from src.types.artifact_schema import (
     ArtifactMetadata,
     CredentialDefinition,
     CredentialKind,
+    GlobalAssertion,
+    GlobalAssertionType,
     InputParamDefinition,
     ParamType,
 )
-from src.types.step_schema import ActionType, CheckpointType, Locator, LocatorType, SafetyTier, Step
+from src.types.step_schema import ActionType, CheckpointType, Locator, LocatorType, SafetyTier, Step, StepCheckpoint
 from src.discovery.perception import (
     _COLLECTOR_SOURCE,
     _TAG_FONT,
@@ -1748,3 +1763,303 @@ async def test_a_whole_recording_on_the_bank_is_a_valid_artifact(page, recorder,
     assert artifact.steps[-1].safety_tier == SafetyTier.IRREVERSIBLE
     assert artifact.steps[-1].checkpoints == []
     assert env.mock_bank_password.get_secret_value() not in run_logger.log_path.read_text(encoding="utf-8")
+
+
+# --- backstop: the save-time scan over the whole artifact ---
+
+def _bs_locators(*values, kind=LocatorType.CSS) -> list[Locator]:
+    return [Locator(type=kind, value=value, priority=number) for number, value in enumerate(values)]
+
+
+def _bs_step(index, action, description, value=None, *, locators=None, checkpoints=(), option_value=None) -> Step:
+    if locators is None:
+        locators = [] if action == ActionType.NAVIGATE else _bs_locators(f"#s{index}")
+    return Step(sequence_index=index, action=action, description=description, locators=locators,
+                input_value=value, option_value=option_value, checkpoints=list(checkpoints))
+
+
+def _bs_check(kind, value, target=None) -> StepCheckpoint:
+    return StepCheckpoint(type=kind, expected_value=value, target_locator=target, timeout_ms=10000)
+
+
+def _bs_artifact(*steps, example_value=None, global_assertions=()) -> Artifact:
+    # Step 0 opens the start page; the steps given follow it, numbered from 1.
+    now = datetime.now(timezone.utc)
+    return Artifact(
+        metadata=ArtifactMetadata(capability="member_servicing_and_bill_pay",
+                                  description="For member {member_id}, pay {amount} to {payee_name}.",
+                                  version="1.0.0", target_url="http://localhost:5000/login",
+                                  created_timestamp=now, last_updated_timestamp=now),
+        input_parameters=[
+            InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID",
+                                 example_value=example_value),
+            InputParamDefinition(key="amount", type=ParamType.NUMBER, description="Amount to pay"),
+            InputParamDefinition(key="payee_name", type=ParamType.STRING, description="Payee"),
+        ],
+        credentials=[
+            CredentialDefinition(key="bank_username", kind=CredentialKind.CONFIG, description="Teller username"),
+            CredentialDefinition(key="bank_password", kind=CredentialKind.SECRET, description="Teller password"),
+        ],
+        steps=[_bs_step(0, ActionType.NAVIGATE, "Open the start page"), *steps],
+        global_assertions=list(global_assertions),
+    )
+
+
+def _bs_inputs(extracted=None, **extra_text) -> ScanInputs:
+    # The username and the secret are set here, not read from .env, so every case is explicit.
+    run = RunValues(text_inputs={"member_id": "10234", "payee_name": "Sunbelt Electric Co", **extra_text},
+                    number_inputs={"amount": 50.0}, username="admin",
+                    secrets={"bank_password": SecretStr(FAKE_PASSWORD)})
+    return ScanInputs(run, username_key="bank_username", extracted=extracted or {})
+
+
+def _bs_problems(*steps, **extra_text):
+    inputs = _bs_inputs(**extra_text)
+    return find_problems(convert(_bs_artifact(*steps), inputs), inputs)
+
+
+# Which fields the scan reads
+
+def test_every_text_field_is_read_with_the_treatment_for_who_wrote_it():
+    artifact = _bs_artifact(
+        _bs_step(1, ActionType.TYPE, "Enter the username", "{credential:bank_username}"),
+        _bs_step(2, ActionType.SELECT, "Pay from checking", "Checking", option_value="CHK"),
+        _bs_step(3, ActionType.ASSERT_TEXT, "Check the panel", "Payment Details"),
+        _bs_step(4, ActionType.CLICK, "Open the member", checkpoints=[
+            _bs_check(CheckpointType.PAGE_TITLE, "Member Detail"),
+            _bs_check(CheckpointType.URL_CONTAINS, "/member"),
+            _bs_check(CheckpointType.TEXT_MATCH, "Active", _bs_locators("td.status")[0])]),
+        example_value="10234",
+        global_assertions=[GlobalAssertion(type=GlobalAssertionType.SUCCESS_BANNER_TEXT, value="Payment ready")],
+    )
+    kinds = {"/".join(map(str, field.path)): field.kind for field in artifact_fields(artifact)}
+    assert {
+        "metadata/description": FieldKind.CONTRACT,
+        "input_parameters/0/example_value": FieldKind.CONTRACT,
+        "steps/0/description": FieldKind.DESCRIPTION,
+        "steps/1/input_value": FieldKind.TYPED,
+        "steps/2/input_value": FieldKind.TYPED,
+        "steps/2/option_value": FieldKind.RECORDED,
+        "steps/3/input_value": FieldKind.CHECKED,
+        "steps/4/locators/0/value": FieldKind.RECORDED,
+        "steps/4/checkpoints/0/expected_value": FieldKind.RECORDED,
+        "steps/4/checkpoints/1/expected_value": FieldKind.RECORDED,
+        "steps/4/checkpoints/2/target_locator/value": FieldKind.RECORDED,
+        "steps/4/checkpoints/2/expected_value": FieldKind.CHECKED,
+        "global_assertions/0/value": FieldKind.CHECKED,
+    }.items() <= kinds.items()
+
+
+def test_a_text_field_with_no_treatment_stops_the_scan(monkeypatch):
+    # Stands in for a field added to the schema later and never given a treatment.
+    monkeypatch.setattr(backstop, "SKIPPED_FIELDS", backstop.SKIPPED_FIELDS - {("steps", "*", "step_id")})
+    with pytest.raises(UnclassifiedField, match=r"steps/\*/step_id"):
+        artifact_fields(_bs_artifact())
+
+
+def test_an_input_value_on_a_click_has_no_treatment():
+    with pytest.raises(UnclassifiedField, match="click"):
+        artifact_fields(_bs_artifact(_bs_step(1, ActionType.CLICK, "Go", "hello")))
+
+
+# Converting this run's values
+
+@pytest.mark.parametrize(
+    "action, typed, stored",
+    [
+        pytest.param(ActionType.TYPE, "ADMIN", "{credential:bank_username}", id="username in any case"),
+        pytest.param(ActionType.TYPE, "10234", "{member_id}", id="text input"),
+        pytest.param(ActionType.TYPE, "50.00", "{amount}", id="amount with two decimals"),
+        pytest.param(ActionType.TYPE, "50", "{amount}", id="amount as a whole number"),
+        pytest.param(ActionType.SELECT, "sunbelt electric co", "{payee_name}", id="payee label in any case"),
+        pytest.param(ActionType.TYPE, "Member 10234", "Member 10234", id="input inside other text stays"),
+        pytest.param(ActionType.TYPE, "$50.00", "$50.00", id="amount with a currency sign stays"),
+        pytest.param(ActionType.TYPE, "Checking", "Checking", id="literal matching nothing stays"),
+        pytest.param(ActionType.SELECT, "admin", "admin", id="username is never a dropdown choice"),
+    ],
+)
+def test_a_typed_value_is_converted_only_when_the_whole_value_is_one_input(action, typed, stored):
+    converted = convert(_bs_artifact(_bs_step(1, action, "Type it", typed)), _bs_inputs())
+    assert converted.artifact.steps[1].input_value == stored
+
+
+def test_a_dropdown_whose_choice_became_an_input_drops_its_hidden_value():
+    artifact = _bs_artifact(_bs_step(1, ActionType.SELECT, "Pick", "Sunbelt Electric Co", option_value="P001"))
+    converted = convert(artifact, _bs_inputs())
+    assert (converted.artifact.steps[1].input_value, converted.artifact.steps[1].option_value) == ("{payee_name}", None)
+    assert converted.option_values_dropped == [1]
+
+
+def test_whole_words_are_replaced_in_checked_text_and_descriptions():
+    artifact = _bs_artifact(
+        _bs_step(1, ActionType.ASSERT_TEXT, "Check the amount", "Amount: $50.00"),
+        _bs_step(2, ActionType.CLICK, "Logged in as admin; pay member 10234 $50 to SUNBELT ELECTRIC CO. "
+                                      "Administration menu; 150 and 50.75 are other numbers."),
+    )
+    converted = convert(artifact, _bs_inputs())
+    assert converted.artifact.steps[1].input_value == "Amount: ${amount}"
+    assert converted.artifact.steps[2].description == (
+        "Logged in as (teller username); pay member {member_id} ${amount} to {payee_name}. "
+        "Administration menu; 150 and 50.75 are other numbers.")
+    assert [c.replaced_with for c in converted.conversions if c.step_index == 2] == [
+        "(teller username)", "{member_id}", "{amount}", "{payee_name}"]
+
+
+def test_placeholders_recorded_fields_and_the_contract_are_never_rewritten():
+    artifact = _bs_artifact(
+        _bs_step(1, ActionType.CLICK, "Already {member_id}", checkpoints=[
+            _bs_check(CheckpointType.PAGE_TITLE, "Member 10234")]),
+        example_value="10234",
+    )
+    original = artifact.model_dump()
+    converted = convert(artifact, _bs_inputs())
+    assert converted.artifact.model_dump() == original
+    assert converted.conversions == []
+    assert artifact.model_dump() == original
+
+
+def test_a_value_equal_to_two_inputs_is_left_as_it_was():
+    artifact = _bs_artifact(_bs_step(1, ActionType.TYPE, "Search for member 10234", "10234"))
+    converted = convert(artifact, _bs_inputs(account_id="10234"))
+    assert (converted.artifact.steps[1].input_value, converted.artifact.steps[1].description) == (
+        "10234", "Search for member 10234")
+    assert [a.candidates for a in converted.ambiguities] == [("{account_id}", "{member_id}")] * 2
+
+
+# What stops the save
+
+@pytest.mark.parametrize(
+    "step, extra_text, code, words",
+    [
+        pytest.param(_bs_step(1, ActionType.TYPE, "Type it", FAKE_PASSWORD), {},
+                     AbortCode.SECRET_LITERAL, "the secret bank_password", id="secret"),
+        pytest.param(_bs_step(1, ActionType.TYPE, "Type it", "Member 10234"), {},
+                     AbortCode.EMBEDDED_INPUT_LITERAL, "the input member_id inside other text", id="embedded input"),
+        pytest.param(_bs_step(1, ActionType.ASSERT_TEXT, "Check", "Teller: admin"), {},
+                     AbortCode.USERNAME_LITERAL, "teller username", id="username in an assertion"),
+        pytest.param(_bs_step(1, ActionType.ASSERT_TEXT, "Check", "Call (602) 555-0142"), {},
+                     AbortCode.SENSITIVE_LITERAL, "phone number", id="phone in an assertion"),
+        pytest.param(_bs_step(1, ActionType.CLICK, "Email laura.whitfield@example.com"), {},
+                     AbortCode.SENSITIVE_LITERAL, "email address", id="email in a description"),
+        pytest.param(_bs_step(1, ActionType.CLICK, "Pay", locators=_bs_locators("Pay $50.00", kind=LocatorType.TEXT_CONTENT)),
+                     {}, AbortCode.RECORDED_FIELD_LITERAL, "locator 1: carries the value of the input amount",
+                     id="amount in a locator"),
+        pytest.param(_bs_step(1, ActionType.CLICK, "Go", checkpoints=[_bs_check(CheckpointType.PAGE_PATH, "/member/10234")]),
+                     {}, AbortCode.RECORDED_FIELD_LITERAL, "page path check: carries the value of the input member_id",
+                     id="member in a page path"),
+        pytest.param(_bs_step(1, ActionType.TYPE, "Type it", "10234"), {"account_id": "10234"},
+                     AbortCode.AMBIGUOUS_LITERAL, "{account_id}, {member_id}", id="equal to two inputs"),
+    ],
+)
+def test_each_problem_stops_the_save_with_its_own_code(step, extra_text, code, words):
+    findings = _bs_problems(step, **extra_text)
+    assert [finding.code for finding in findings] == [code]
+    assert words in findings[0].message
+    assert FAKE_PASSWORD not in findings[0].message
+
+
+@pytest.mark.parametrize(
+    "example_value, codes",
+    [pytest.param(FAKE_PASSWORD, [AbortCode.SECRET_LITERAL], id="a secret stops it"),
+     pytest.param("10234", [], id="an input value is the engineer's choice")],
+)
+def test_the_contract_is_checked_for_secrets_only(example_value, codes):
+    inputs = _bs_inputs()
+    findings = find_problems(convert(_bs_artifact(example_value=example_value), inputs), inputs)
+    assert [finding.code for finding in findings] == codes
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("amount", [1.0, 2.0, 3.0])
+async def test_position_numbers_our_generator_writes_are_never_read_as_an_amount(page, amount):
+    # Every locator the recorder would store for the sign-on page's elements, position
+    # paths and the label XPath's [1] included, passes the second look with a small amount.
+    await page.goto("/login")
+    observation = await observe(page)
+    run = RunValues(number_inputs={"amount": amount})
+    stored = []
+    for element in observation.elements:
+        for candidate in await generate_candidates(element):
+            outcome = scan(candidate, run)
+            if outcome.stored_value is not None:
+                stored.append((candidate.locator_type, outcome.stored_value))
+    assert any(":nth-of-type(" in value for _, value in stored)
+    assert any("[1]" in value for _, value in stored)
+    locators = [Locator(type=kind, value=value, priority=number) for number, (kind, value) in enumerate(stored)]
+    artifact = _bs_artifact(_bs_step(1, ActionType.CLICK, "Sign in", locators=locators))
+    inputs = ScanInputs(run, username_key="bank_username", extracted={})
+    assert find_problems(convert(artifact, inputs), inputs) == []
+
+
+def test_the_result_reports_the_worst_finding_and_counts_the_rest():
+    findings = _bs_problems(_bs_step(1, ActionType.TYPE, "Type it", "Member 10234"),
+                            _bs_step(2, ActionType.TYPE, "Type it", FAKE_PASSWORD))
+    error = abort_error(findings)
+    assert error.code == "SECRET_LITERAL"
+    assert error.message.startswith("step 2 typed value:")
+    assert error.message.endswith("; 1 more finding in the run log")
+
+
+def test_on_a_tie_the_earliest_finding_is_reported():
+    findings = _bs_problems(_bs_step(1, ActionType.ASSERT_TEXT, "Check", "Teller: admin"),
+                            _bs_step(2, ActionType.TYPE, "Type it", "Member 10234"))
+    assert abort_error(findings).message.startswith("step 1 assertion:")
+
+
+def test_abort_error_needs_a_finding():
+    with pytest.raises(ValueError):
+        abort_error([])
+
+
+# Assertions that may hold only for this member, and the report
+
+def test_an_assertion_holding_a_value_this_run_read_or_typed_is_flagged_not_stopped():
+    artifact = _bs_artifact(
+        _bs_step(1, ActionType.SELECT, "Pay from checking", "Checking"),
+        _bs_step(2, ActionType.ASSERT_TEXT, "Check the balance", "Balance: $2,450.32"),
+        _bs_step(3, ActionType.ASSERT_TEXT, "Check the account", "Checking account"),
+        _bs_step(4, ActionType.ASSERT_TEXT, "Check the panel", "Payment Details"),
+    )
+    inputs = _bs_inputs(extracted={"checking_balance": "$2,450.32"})
+    flagged = flag_assertions(convert(artifact, inputs).artifact, inputs)
+    assert [(flag.step_index, flag.reason) for flag in flagged] == [
+        (2, "contains the value read into checking_balance"),
+        (3, "contains the value typed at step 1"),
+    ]
+    assert find_problems(convert(artifact, inputs), inputs) == []
+
+
+def test_a_clean_artifact_passes_with_its_report():
+    artifact = _bs_artifact(
+        _bs_step(1, ActionType.TYPE, "Enter member 10234", "10234"),
+        _bs_step(2, ActionType.SELECT, "Pay from checking", "Checking"),
+        _bs_step(3, ActionType.ASSERT_TEXT, "Check the amount", "Amount: $50.00"),
+    )
+    result = scan_artifact(artifact, _bs_inputs())
+    assert result.error is None
+    assert result.artifact.steps[1].input_value == "{member_id}"
+    fields = result.report.log_fields()
+    assert fields["outcome"] == "passed"
+    assert [c["replaced_with"] for c in fields["conversions"]] == ["{member_id}", "{member_id}", "{amount}"]
+    assert fields["literals_kept"] == [{"step": 2, "field": "steps/2/input_value", "value": "Checking"}]
+    assert fields["assertions_recorded"] == [{"step": 3, "field": "steps/3/input_value", "text": "Amount: ${amount}"}]
+    assert fields["findings"] == []
+
+
+def test_a_stopped_save_logs_every_finding_and_never_a_value_that_stopped_it(run_logger):
+    artifact = _bs_artifact(
+        _bs_step(1, ActionType.TYPE, "Type it", "Member 10234"),
+        _bs_step(2, ActionType.TYPE, "Type it", FAKE_PASSWORD),
+        _bs_step(3, ActionType.SELECT, "Pay from checking", "Checking"),
+    )
+    result = scan_artifact(artifact, _bs_inputs())
+    assert result.artifact is None
+    assert result.error.code == "SECRET_LITERAL"
+    run_logger.backstop_scan(**result.report.log_fields())
+    line = _log_lines(run_logger)[-1]
+    assert (line["event_type"], line["outcome"]) == ("BACKSTOP_SCAN", "SECRET_LITERAL")
+    assert [finding["code"] for finding in line["findings"]] == ["EMBEDDED_INPUT_LITERAL", "SECRET_LITERAL"]
+    assert line["literals_kept"] == [{"step": 3, "field": "steps/3/input_value", "value": "Checking"}]
+    logged = run_logger.log_path.read_text(encoding="utf-8")
+    assert FAKE_PASSWORD not in logged
+    assert "Member 10234" not in logged

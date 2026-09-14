@@ -1,5 +1,6 @@
 """Reading the page the same way in discovery and replay."""
 import re
+from typing import Optional
 
 from playwright.async_api import ElementHandle, Page
 
@@ -49,22 +50,31 @@ async def element_wording(element: ElementHandle) -> list[str]:
     return await element.evaluate(_WORDING)
 
 
-def phrase_matches(text: str, phrase: str) -> bool:
-    """Whether the phrase appears in the text as whole words, ignoring case.
+def phrase_pattern(phrase: str) -> Optional[re.Pattern[str]]:
+    """The phrase as whole words in any case; None for a phrase with no words.
 
-    Runs of whitespace, &nbsp; included, count as one space on both sides. "Pay" never
-    matches inside "Payment", but "Payment submitted" matches in "Payment submitted -
-    Ref 88121": data before or after the phrase doesn't stop it.
+    Runs of whitespace, &nbsp; included, count as one space on both sides. Also the
+    save-time scan's rule for finding an input's value in text, so both read words alike.
     """
     words = phrase.split()
     if not words:
-        return False
+        return None
     body = r"\s+".join(re.escape(word) for word in words)
     # Word boundaries only where the phrase starts or ends with a word character, so a
     # phrase like "Amount:" still matches before a space or the end of the text.
     start = r"(?<!\w)" if re.match(r"\w", words[0]) else ""
     end = r"(?!\w)" if re.search(r"\w$", words[-1]) else ""
-    return re.search(start + body + end, text, re.IGNORECASE) is not None
+    return re.compile(start + body + end, re.IGNORECASE)
+
+
+def phrase_matches(text: str, phrase: str) -> bool:
+    """Whether the phrase appears in the text as whole words, ignoring case.
+
+    "Pay" never matches inside "Payment", but "Payment submitted" matches in "Payment
+    submitted - Ref 88121": data before or after the phrase doesn't stop it.
+    """
+    pattern = phrase_pattern(phrase)
+    return pattern is not None and pattern.search(text) is not None
 
 
 async def shows_phrase(element: ElementHandle, phrase: str) -> bool:

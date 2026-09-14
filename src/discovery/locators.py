@@ -268,7 +268,7 @@ def scan(candidate: Candidate, run: RunValues) -> ScanOutcome:
 
     texts = list(candidate.data)
     if stored_address is not None:
-        texts.append(_without_placeholders(stored_address))
+        texts.append(without_placeholders(stored_address))
     for name, text_input in run.text_inputs.items():
         if text_input and any(text_input.casefold() in text.casefold() for text in texts):
             return ScanOutcome(None, f"carries the value of the input {name}")
@@ -366,7 +366,8 @@ def _literal(text: str) -> str:
     return text.replace("{", "{{").replace("}", "}}")
 
 
-def _without_placeholders(text: str) -> str:
+def without_placeholders(text: str) -> str:
+    """The text with its placeholders taken out. Shared with the save-time backstop scan."""
     pieces = []
     position = 0
     for _, start, end in iter_placeholders(text):
