@@ -25,7 +25,7 @@ from src.discovery.locators import (
     scan,
 )
 from src.discovery.perception import Box, ElementFacts, PageElement
-from src.locating.checks import element_wording, find_phrase, is_password_box
+from src.locating.checks import VALUE_CELL, element_wording, find_phrase, is_password_box
 from src.observability.logger import RunLogger
 from src.safety.classifier import classify
 from src.safety.secret_typing import typing_refusal
@@ -64,14 +64,6 @@ class ExtractionRefused(RecordingError):
     """The value can't be read by that label; the message says why, worded for the model."""
 
 
-# The cell after the one holding the label, in the same row: where legacy pages show a value.
-_VALUE_CELL = """(element) => {
-  const cell = element.closest("td, th");
-  if (!cell) return null;
-  let next = cell.nextElementSibling;
-  while (next && !["TD", "TH"].includes(next.tagName)) next = next.nextElementSibling;
-  return next;
-}"""
 # The label cell's whole text, the way the XPath locator will compare it.
 _LABEL_CELL_TEXT = """(element) => {
   const cell = element.closest("td, th");
@@ -260,7 +252,7 @@ class Recorder:
                 raise ExtractionRefused(
                     f'"{label}" is shown by {len(matches)} elements; quote a longer label that appears once'
                 )
-            value_cell = (await matches[0].evaluate_handle(_VALUE_CELL)).as_element()
+            value_cell = (await matches[0].evaluate_handle(VALUE_CELL)).as_element()
             if value_cell is None:
                 raise ExtractionRefused(
                     f'no table cell follows "{label}"; quote the label shown right before the value'

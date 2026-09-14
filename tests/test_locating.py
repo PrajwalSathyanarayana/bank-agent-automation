@@ -3,7 +3,14 @@ from decimal import Decimal
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
-from src.locating.checks import element_wording, find_phrase, is_password_box, phrase_matches, shows_phrase
+from src.locating.checks import (
+    element_wording,
+    find_phrase,
+    is_password_box,
+    phrase_matches,
+    shows_phrase,
+    value_beside,
+)
 from src.locating.resolver import UnfillableLocator, css_string, fill, resolve
 from src.locating.values import UnreadableValue, read_money, read_number, read_output
 from src.types.artifact_schema import OutputParamDefinition, OutputType
@@ -325,3 +332,27 @@ def test_a_refusal_quotes_the_page_text_but_never_a_whole_page():
     with pytest.raises(UnreadableValue) as refused:
         read_money("x" * 500, "USD")
     assert len(str(refused.value)) < 120
+
+
+# --- the value beside a label ---
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body, label, expected",
+    [
+        pytest.param("<table><tr><td>Payee:</td><td>Sunbelt Electric Co</td></tr></table>", "Payee:",
+                     "Sunbelt Electric Co", id="the cell after the label"),
+        pytest.param("<table><tr><td>Amount:</td><td>&nbsp;$50.00 </td></tr></table>", "Amount:", "$50.00",
+                     id="spaces trimmed"),
+        pytest.param("<table><tr><td>Payee:</td><td>A</td></tr><tr><td>Payee:</td><td>B</td></tr></table>",
+                     "Payee:", None, id="the label shown twice"),
+        pytest.param("<table><tr><td>Payee:</td></tr></table>", "Payee:", None, id="no cell after it"),
+        pytest.param("<table><tr><td>Payee:</td><td></td></tr></table>", "Payee:", None, id="an empty cell"),
+        pytest.param("<p>Payee: Sunbelt</p>", "Payee:", None, id="not in a table"),
+        pytest.param("<table><tr><td>Member:</td><td>Laura</td></tr></table>", "Payee:", None,
+                     id="the label not shown"),
+    ],
+)
+async def test_value_beside_reads_the_cell_after_a_label_shown_once(page, body, label, expected):
+    await _set_page(page, body)
+    assert await value_beside(page, label) == expected

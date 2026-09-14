@@ -103,3 +103,36 @@ async def find_phrase(page: Page, phrase: str) -> list[ElementHandle]:
         else:
             await handle.dispose()
     return found
+
+
+# The cell after the one holding the label, in the same row: where legacy pages show a value.
+VALUE_CELL = """(element) => {
+  const cell = element.closest("td, th");
+  if (!cell) return null;
+  let next = cell.nextElementSibling;
+  while (next && !["TD", "TH"].includes(next.tagName)) next = next.nextElementSibling;
+  return next;
+}"""
+
+
+async def value_beside(page: Page, label: str) -> Optional[str]:
+    """The text in the cell right after the label, read the way discovery reads a balance.
+
+    None when the label isn't shown by exactly one visible element, no cell follows it, or
+    that cell is empty: a value nobody can be sure of is no value.
+    """
+    matches = await find_phrase(page, label)
+    try:
+        if len(matches) != 1:
+            return None
+        cell = (await matches[0].evaluate_handle(VALUE_CELL)).as_element()
+        if cell is None:
+            return None
+        try:
+            text = " ".join((await cell.inner_text()).split())
+        finally:
+            await cell.dispose()
+        return text or None
+    finally:
+        for handle in matches:
+            await handle.dispose()

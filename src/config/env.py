@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -19,6 +20,10 @@ class Env(BaseSettings):
     # an irreversible step to learn what follows it; in production it never does.
     # Discovery accepts "sandbox" only for a bank on this machine (src/safety/sandbox.py).
     target_environment: Literal["sandbox", "production"] = "production"
+    # The bank's policy: the largest amount replay may pay without a person, in this currency.
+    # Held exactly, never as a float. Above it, a person decides.
+    auto_execute_limit: Decimal = Field(default=Decimal("1000.00"), gt=0, decimal_places=2)
+    auto_execute_currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
     mock_bank_secret_key: SecretStr
     mock_bank_username: str
     mock_bank_password: SecretStr

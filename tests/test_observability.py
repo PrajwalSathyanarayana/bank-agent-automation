@@ -94,6 +94,9 @@ def test_execution_started_records_resolved_settings(tmp_path, monkeypatch):
     assert logged["evidence_dir"] == str(tmp_path)
     assert logged["anthropic_model"] == env.anthropic_model
     assert logged["mock_bank_base_url"] == env.mock_bank_base_url
+    assert logged["target_environment"] == env.target_environment
+    assert (logged["auto_execute_limit"], logged["auto_execute_currency"]) == (
+        str(env.auto_execute_limit), env.auto_execute_currency)
 
 
 def test_resolved_settings_hold_only_settings_and_named_env_values(tmp_path, monkeypatch):
@@ -101,7 +104,8 @@ def test_resolved_settings_hold_only_settings_and_named_env_values(tmp_path, mon
     logger = _make_logger(tmp_path, monkeypatch)
     logger.execution_started(goal="test goal")
     logged = _read_lines(logger.log_path)[0]["resolved_settings"]
-    expected = set(settings_module.Settings.model_fields) | {"anthropic_model", "mock_bank_base_url"}
+    expected = set(settings_module.Settings.model_fields) | {
+        "anthropic_model", "mock_bank_base_url", "target_environment", "auto_execute_limit", "auto_execute_currency"}
     assert set(logged) == expected
 
 

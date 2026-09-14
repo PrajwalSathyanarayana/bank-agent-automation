@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 from pydantic import ValidationError
 
@@ -84,6 +86,31 @@ def test_secrets_are_masked_when_printed():
 
 def test_username_is_plain_config_not_a_secret():
     assert isinstance(env.mock_bank_username, str)
+
+
+REQUIRED = {"anthropic_api_key": "x", "anthropic_model": "m", "mock_bank_secret_key": "x",
+            "mock_bank_username": "u", "mock_bank_password": "p", "artifact_signing_key": "k" * 32}
+
+
+def test_the_auto_pay_limit_defaults_to_a_thousand_dollars_held_exactly():
+    configured = Env(_env_file="nonexistent.env", **REQUIRED)
+    assert (configured.auto_execute_limit, configured.auto_execute_currency) == (Decimal("1000.00"), "USD")
+    assert isinstance(configured.auto_execute_limit, Decimal)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        pytest.param({"auto_execute_limit": "0"}, id="a limit of zero"),
+        pytest.param({"auto_execute_limit": "-50"}, id="a negative limit"),
+        pytest.param({"auto_execute_limit": "10.005"}, id="finer than a cent"),
+        pytest.param({"auto_execute_limit": "a lot"}, id="not an amount"),
+        pytest.param({"auto_execute_currency": "usd"}, id="currency not in capitals"),
+    ],
+)
+def test_an_unclear_auto_pay_limit_is_rejected(setting):
+    with pytest.raises(ValidationError):
+        Env(_env_file="nonexistent.env", **REQUIRED, **setting)
 
 
 def test_short_signing_key_is_rejected():

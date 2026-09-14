@@ -10,12 +10,15 @@ from src.config.settings import settings
 from src.safety.redactor import redact_dict, scrub_known_values
 
 # Named, not all of env: a secret mistyped as a plain str must not reach the evidence.
-_LOGGED_ENV_FIELDS = ("anthropic_model", "mock_bank_base_url")
+# Named on purpose: every other env value (the username, every secret) stays out of the log.
+_LOGGED_ENV_FIELDS = ("anthropic_model", "mock_bank_base_url", "target_environment",
+                      "auto_execute_limit", "auto_execute_currency")
 
 
 def _resolved_settings() -> dict:
     resolved = settings.model_dump(mode="json")
-    resolved.update({name: getattr(env, name) for name in _LOGGED_ENV_FIELDS})
+    # As text: the limit is an exact Decimal, and JSON has no exact number type.
+    resolved.update({name: str(getattr(env, name)) for name in _LOGGED_ENV_FIELDS})
     return resolved
 
 

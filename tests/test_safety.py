@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from urllib.parse import urlparse
 
 import pytest
@@ -15,6 +16,7 @@ from src.safety.allowlist import (
     check_route,
     enforce_safety,
 )
+from src.safety.authorization import MISMATCH, NO_CHECKS, OVER_LIMIT, authorize
 from src.safety.classifier import SafetyEscalation, classify, verify_tier
 from src.safety.integrity import (
     IntegrityCheckFailed,
@@ -29,6 +31,8 @@ from src.safety.secret_typing import typing_refusal
 from src.types.artifact_schema import (
     Artifact,
     ArtifactMetadata,
+    CompareAs,
+    ConfirmationCheck,
     CredentialDefinition,
     CredentialKind,
     InputParamDefinition,
@@ -532,3 +536,88 @@ def test_sandbox_refusal_names_the_rule_and_the_host():
         "but the start address's host is bank.example.com"
     )
     assert sandbox_refusal("/login").endswith("but the start address has no host")
+
+
+# --- the payment check ---
+
+PAY_CHECKS = [ConfirmationCheck(label="Payee:", input_key="payee_name", compare_as=CompareAs.TEXT),
+              ConfirmationCheck(label="Amount:", input_key="amount", compare_as=CompareAs.MONEY, currency="USD")]
+PAY_REQUEST = {"member_id": "10234", "payee_name": "Sunbelt Electric Co", "amount": 50.0}
+PAY_LIMIT = Decimal("1000.00")
+
+
+def _screen(payee="Sunbelt Electric Co", amount="$50.00") -> dict:
+    # What the confirm screen shows beside each label.
+    return {"Payee:": payee, "Amount:": amount}
+
+
+def _authorize(readings, request=PAY_REQUEST, currency="USD", checks=PAY_CHECKS):
+    return authorize(checks, readings, request, PAY_LIMIT, currency)
+
+
+def test_a_screen_showing_exactly_the_request_is_authorized():
+    result = _authorize(_screen())
+    assert (result.authorized, result.code, result.problems) == (True, None, ())
+
+
+@pytest.mark.parametrize(
+    "readings, asked",
+    [
+        pytest.param(_screen(payee="Sunbelt  Electric Co"), PAY_REQUEST, id="extra spaces ignored"),
+        pytest.param(_screen(amount="50.00 USD"), PAY_REQUEST, id="the amount in another common form"),
+        pytest.param(_screen(amount="$1,000.00"), {**PAY_REQUEST, "amount": 1000.0}, id="exactly at the limit"),
+    ],
+)
+def test_what_still_counts_as_the_same_payment(readings, asked):
+    assert _authorize(readings, asked).authorized
+
+
+@pytest.mark.parametrize(
+    "readings, asked, reason",
+    [
+        pytest.param(_screen(payee="Acme Gas"), PAY_REQUEST, "doesn't show what was requested", id="another payee"),
+        pytest.param(_screen(payee="sunbelt electric co"), PAY_REQUEST, "doesn't show what was requested",
+                     id="the payee in another case"),
+        pytest.param(_screen(amount="$50.01"), PAY_REQUEST, "doesn't show what was requested", id="a cent more"),
+        pytest.param({"Amount:": "$50.00"}, PAY_REQUEST, "isn't shown once", id="the payee not shown"),
+        pytest.param(_screen(amount="fifty dollars"), PAY_REQUEST, "doesn't show a USD amount",
+                     id="an amount that can't be read"),
+        pytest.param(_screen(), {**PAY_REQUEST, "amount": 50.005}, "not a USD amount to the cent",
+                     id="a request finer than a cent"),
+        pytest.param(_screen(amount="$0.00"), {**PAY_REQUEST, "amount": 0.0}, "not a positive amount",
+                     id="a zero payment"),
+    ],
+)
+def test_anything_else_is_a_mismatch_so_nothing_is_clicked(readings, asked, reason):
+    result = _authorize(readings, asked)
+    assert (result.authorized, result.code) == (False, MISMATCH)
+    assert reason in result.problems[0].reason
+
+
+def test_a_mismatch_says_what_was_expected_and_what_was_seen():
+    [problem] = _authorize(_screen(payee="Acme Gas")).problems
+    assert (problem.label, problem.expected, problem.seen) == ("Payee:", "Sunbelt Electric Co", "Acme Gas")
+
+
+def test_an_amount_above_the_limit_goes_to_a_person():
+    result = _authorize(_screen(amount="$1,000.01"), {**PAY_REQUEST, "amount": 1000.01})
+    assert result.code == OVER_LIMIT
+    [problem] = result.problems
+    assert (problem.label, problem.expected, problem.seen) == ("Amount:", "at most 1000.00 USD", "1000.01 USD")
+
+
+def test_a_mismatch_outranks_the_limit():
+    # A wrong payment is never merely "too large": the code says it is wrong.
+    result = _authorize(_screen(payee="Acme Gas", amount="$5,000.00"), {**PAY_REQUEST, "amount": 5000.0})
+    assert result.code == MISMATCH
+    assert [problem.label for problem in result.problems] == ["Payee:", "Amount:"]
+
+
+def test_an_amount_in_a_currency_with_no_limit_goes_to_a_person():
+    result = _authorize(_screen(), currency="EUR")
+    assert result.code == OVER_LIMIT
+    assert "no auto-pay limit is set for USD" in result.problems[0].reason
+
+
+def test_no_declared_checks_means_no_automatic_click():
+    assert _authorize(_screen(), checks=[]).code == NO_CHECKS
