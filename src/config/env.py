@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,6 +15,9 @@ class Env(BaseSettings):
     anthropic_api_key: SecretStr
     anthropic_model: str
     mock_bank_base_url: str = "http://localhost:5000"
+    # What the bank address points at. In a sandbox (a test copy) discovery may perform
+    # an irreversible step to learn what follows it; in production it never does.
+    target_environment: Literal["sandbox", "production"] = "production"
     mock_bank_secret_key: SecretStr
     mock_bank_username: str
     mock_bank_password: SecretStr
