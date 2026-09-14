@@ -66,6 +66,10 @@ CONTRACTS = {
             KnownOutcome(code="PAYEE_NOT_FOUND", description="The payee isn't in the payee list",
                          signal=OutcomeSignal.NO_SUCH_OPTION, input_key="payee_name"),
         ],
+        # Only the pages bill pay needs, its outcome and session-timeout pages included. The
+        # profile edit page (/member/<id>/edit) changes member data and is left out on purpose.
+        allowed_paths=["/", "/login", "/dashboard", "/search", "/member/*", "/member/*/accounts",
+                       "/billpay", "/billpay/confirm", "/session-timeout"],
     ),
 }
 

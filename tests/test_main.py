@@ -1,5 +1,6 @@
 import html
 import re
+from urllib.parse import urlparse
 
 import pytest
 
@@ -9,6 +10,7 @@ from src.config.settings import settings
 from src.locating.checks import phrase_matches
 from src.main import BILL_PAY, CONTRACTS, parse_args
 from src.types.artifact_schema import OutcomeSignal, OutputType
+from src.types.routes import route_allowed
 
 
 def test_the_bill_pay_contract_declares_its_inputs_outputs_and_credentials():
@@ -73,6 +75,32 @@ def test_no_outcome_wording_appears_on_the_normal_path(bank):
     for outcome in CONTRACTS[BILL_PAY].known_outcomes:
         if outcome.text:
             assert not any(phrase_matches(text, outcome.text) for text in texts), outcome.code
+
+
+def _pages_passed(response) -> set[str]:
+    # Every page a request went through, redirects included.
+    return {step.request.path for step in (*response.history, response)}
+
+
+def test_every_page_of_the_flow_and_its_outcomes_is_allowed_but_profile_edit_is_not(bank):
+    allowed = CONTRACTS[BILL_PAY].allowed_paths
+    flow = [("GET", "/", None), ("GET", "/dashboard", None), ("GET", "/search", None),
+            ("POST", "/search", {"member_id": "10234"}), ("GET", "/member/10234/accounts", None),
+            ("GET", "/billpay", None), ("POST", "/billpay", {"payee_id": "P001", "amount": "50.00"}),
+            ("POST", "/billpay/confirm", None)]
+    visited = set()
+    for method, path, data in flow:
+        visited |= _pages_passed(bank.open(path, method=method, data=data, follow_redirects=True))
+    for code in ("MEMBER_NOT_FOUND", "INSUFFICIENT_FUNDS", "ACCOUNT_RESTRICTED"):
+        visited |= _pages_passed(_trigger(bank, code))
+    signed_out = create_app().test_client()
+    for path in ("/login", "/dashboard"):
+        visited |= _pages_passed(signed_out.get(path, follow_redirects=True))
+
+    assert {"/member/10234", "/member/not-found", "/billpay/confirm", "/session-timeout"} <= visited
+    assert sorted(path for path in visited if not route_allowed(path, allowed)) == []
+    assert not route_allowed("/member/10234/edit", allowed)
+    assert route_allowed(urlparse(CONTRACTS[BILL_PAY].target_url).path, allowed)
 
 
 def test_the_discover_command_reads_typed_inputs_a_step_limit_and_a_window_option():
