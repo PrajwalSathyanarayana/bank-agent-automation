@@ -36,11 +36,12 @@ from src.discovery.prompts import (
     SYSTEM_PROMPT,
     allowlist_refusal,
     goal_message,
+    outputs_first,
     page_blocks,
     progress,
     tool_definitions,
 )
-from src.discovery.recorder import Action, AssertionRefused, Recorder, TypingRefused
+from src.discovery.recorder import Action, AssertionRefused, ExtractionRefused, Recorder, TypingRefused
 from src.observability.logger import RunLogger
 from src.safety.allowlist import AllowlistViolation, check_domain, enforce_safety
 from src.safety.redactor import redact_text, scrub_known_values
@@ -62,7 +63,6 @@ _TOOL_ACTIONS = {
     "dismiss_overlay": ActionType.CLICK,
     "type_text": ActionType.TYPE,
     "select_option": ActionType.SELECT,
-    "extract_text": ActionType.EXTRACT_TEXT,
 }
 _UNLOCATABLE = "Refused: that element can't be found again reliably on a later run; choose another way."
 _NOT_AN_OVERLAY = "Refused: that control does more than close an overlay; use click if the goal needs it."
@@ -79,6 +79,9 @@ class ModelReply:
 
     stop_reason: str
     content: list[Any]
+    # Tokens the call used: input_tokens (uncached), cache_write_tokens, cache_read_tokens,
+    # output_tokens.
+    usage: Optional[Mapping[str, int]] = None
 
 
 class Model(Protocol):
@@ -118,7 +121,33 @@ class ClaudeModel:
             )
         except (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.InternalServerError) as error:
             raise ModelCallFailed(type(error).__name__) from None
-        return ModelReply(response.stop_reason, list(response.content))
+        usage = response.usage
+        return ModelReply(response.stop_reason, list(response.content), {
+            "input_tokens": usage.input_tokens or 0,
+            "cache_write_tokens": usage.cache_creation_input_tokens or 0,
+            "cache_read_tokens": usage.cache_read_input_tokens or 0,
+            "output_tokens": usage.output_tokens or 0,
+        })
+
+
+# US dollars per million tokens (input, output) at list price. A cache write costs 1.25x
+# the input price, a cache read 0.1x.
+_PRICES = {"claude-opus-5": (5.0, 25.0)}
+_USAGE_KEYS = ("input_tokens", "cache_write_tokens", "cache_read_tokens", "output_tokens")
+
+
+def estimated_cost_usd(model: str, usage: Mapping[str, int]) -> Optional[float]:
+    """What the tokens cost at list price, for the run log; None for a model with no known price."""
+    if model not in _PRICES:
+        return None
+    input_price, output_price = _PRICES[model]
+    dollars = (
+        usage["input_tokens"] * input_price
+        + usage["cache_write_tokens"] * input_price * 1.25
+        + usage["cache_read_tokens"] * input_price * 0.1
+        + usage["output_tokens"] * output_price
+    ) / 1_000_000
+    return round(dollars, 4)
 
 
 @dataclass(frozen=True)
@@ -131,14 +160,25 @@ class DiscoveryRequest:
 
 
 async def discover(
-    request: DiscoveryRequest, model: Model, logger: RunLogger, *, headless: bool = True
+    request: DiscoveryRequest,
+    model: Model,
+    logger: RunLogger,
+    *,
+    headless: bool = True,
+    max_steps: Optional[int] = None,
+    sandbox: Optional[bool] = None,
 ) -> ExecutionResult:
     """Run one discovery and return its result.
 
     Every way the run can end becomes a result, never an exception: SUCCESS or
     HUMAN_ESCALATED with a saved artifact, HARD_ABORT with a reason, or TECHNICAL_FAIL.
+    max_steps lowers the step limit for one run (e.g. a first, cautious real run).
+    sandbox says whether the bank is a test copy, where an irreversible step is
+    performed to learn what follows it; None reads TARGET_ENVIRONMENT.
     """
-    return await _Discovery(request, model, logger, headless).execute()
+    if sandbox is None:
+        sandbox = env.target_environment == "sandbox"
+    return await _Discovery(request, model, logger, headless, max_steps, sandbox).execute()
 
 
 @dataclass(frozen=True)
@@ -159,12 +199,16 @@ class _ModelUnavailable(Exception):
 
 
 class _Discovery:
-    def __init__(self, request: DiscoveryRequest, model: Model, logger: RunLogger, headless: bool) -> None:
+    def __init__(self, request: DiscoveryRequest, model: Model, logger: RunLogger, headless: bool,
+                 max_steps: Optional[int], sandbox: bool) -> None:
         contract = request.contract
         self._contract = contract
         self._model = model
         self._logger = logger
         self._headless = headless
+        self._sandbox = sandbox
+        self._max_steps = max_steps or settings.discovery_max_steps
+        self._usage = dict.fromkeys(_USAGE_KEYS, 0)
 
         configured = configured_credentials()
         missing = [credential.key for credential in contract.credentials if credential.key not in configured]
@@ -223,8 +267,10 @@ class _Discovery:
         except _ModelUnavailable as failure:
             return self._end(ExecutionStatus.TECHNICAL_FAIL, "MODEL_UNAVAILABLE", str(failure))
         except anthropic.APIStatusError as error:
+            # The API's own explanation names the offending field; redacted and scrubbed.
+            reason = self._clean(str(error.message))[:500]
             return self._end(ExecutionStatus.TECHNICAL_FAIL, "MODEL_REQUEST_REJECTED",
-                             f"the model API rejected the request (HTTP {error.status_code})")
+                             f"the model API rejected the request (HTTP {error.status_code}): {reason}")
         except PlaywrightError as error:
             return self._end(ExecutionStatus.TECHNICAL_FAIL, "BROWSER_FAILED", _first_line(error))
 
@@ -235,15 +281,16 @@ class _Discovery:
     async def _loop(self) -> ExecutionResult:
         told = _Next(self._first_message)
         while True:
-            if self._turns >= settings.discovery_max_steps:
+            if self._turns >= self._max_steps:
                 return self._end(ExecutionStatus.HARD_ABORT, "MAX_STEPS",
-                                 f"the step limit ({settings.discovery_max_steps}) was reached")
+                                 f"the step limit ({self._max_steps}) was reached")
             if self._time_left_ms() <= 0:
                 raise _OutOfTime()
             async with observing(self._page) as observation:
                 self._messages.append({"role": "user", "content": self._user_content(told, observation)})
                 reply = await self._ask()
                 self._turns += 1
+                self._count_usage(reply)
                 self._messages.append({"role": "assistant", "content": reply.content})
                 self._log_fallbacks(reply)
 
@@ -258,9 +305,12 @@ class _Discovery:
                     told = _Next(NO_ACTION_REPROMPT)
                     continue
                 self._no_action = 0
+                self._log_decision(call)
                 outcome = await self._handle(call, observation)
                 if isinstance(outcome, ExecutionResult):
                     return outcome
+                if outcome.is_error:
+                    self._logger.action_refused(self._turns, call.name, self._clean(outcome.text))
                 told = outcome
 
     def _user_content(self, told: _Next, observation: Observation) -> list[dict[str, Any]]:
@@ -268,16 +318,18 @@ class _Discovery:
         self._save_screenshot(image)
         page = [
             *page_blocks(image, observation.element_list_text()),
-            {"type": "text", "text": progress(self._turns + 1, settings.discovery_max_steps, self._time_left_ms())},
+            {"type": "text", "text": progress(self._turns + 1, self._max_steps, self._time_left_ms())},
         ]
         if told.tool_use_id is None:
             return [{"type": "text", "text": told.text}, *page]
+        # The tool result carries only its outcome as text; the new page follows it in the
+        # same message. An error result holding the screenshot was rejected by the API.
         return [{
             "type": "tool_result",
             "tool_use_id": told.tool_use_id,
-            "content": [{"type": "text", "text": told.text}, *page],
+            "content": told.text,
             "is_error": told.is_error,
-        }]
+        }, *page]
 
     async def _ask(self) -> ModelReply:
         attempts = settings.discovery_llm_retries + 1
@@ -302,6 +354,8 @@ class _Discovery:
         if name == "mark_goal_complete":
             if not self._asserted_here:
                 return _Next(ASSERT_FIRST, call.id, is_error=True)
+            if self._unread_outputs():
+                return _Next(outputs_first(self._unread_outputs()), call.id, is_error=True)
             return self._save(ExecutionStatus.SUCCESS)
         if name == "assert_visible":
             try:
@@ -311,7 +365,24 @@ class _Discovery:
             await self._recorder.commit(drafted.step, self._page, self._run, derived=drafted.derived)
             self._asserted_here = True
             return _Next("Done: the check passed and was recorded.", call.id)
+        if name == "extract_text":
+            return await self._extract(args, call.id)
         return await self._act(name, args, call.id, observation)
+
+    async def _extract(self, args: dict[str, Any], call_id: str) -> Union[_Next, ExecutionResult]:
+        # Read by the label beside the value, so replay reads the same place for anyone.
+        try:
+            drafted = await self._recorder.draft_extraction(
+                args["label"], args["output_key"], args["reason"], self._page, self._run
+            )
+            enforce_safety(self._page.url, drafted.step.action)
+        except ExtractionRefused as refused:
+            return _Next(f"Refused: {refused}.", call_id, is_error=True)
+        except AllowlistViolation:
+            return self._violation(call_id)
+        await self._recorder.commit(drafted.step, self._page, self._run, derived=drafted.derived)
+        self._outputs[args["output_key"]] = drafted.value
+        return _Next(self._with_dialogs(f'Done: read "{drafted.value}" into {args["output_key"]}.'), call_id)
 
     async def _act(self, name: str, args: dict[str, Any], call_id: str, observation: Observation) -> Union[_Next, ExecutionResult]:
         kind = _TOOL_ACTIONS.get(name)
@@ -337,41 +408,47 @@ class _Discovery:
 
         if name == "dismiss_overlay":
             return await self._dismiss(step, element, args["reason"], call_id)
-        if step.safety_tier == SafetyTier.IRREVERSIBLE:
+        irreversible = step.safety_tier == SafetyTier.IRREVERSIBLE
+        if irreversible and not self._sandbox:
+            if self._unread_outputs():
+                # Stopping now would lose the run: an artifact must produce every declared
+                # output. The model goes back for them; the step isn't recorded yet.
+                return _Next(outputs_first(self._unread_outputs()), call_id, is_error=True)
             # Recorded from the screen, never performed: the run stops here for a person.
             await self._recorder.commit(step, self._page, self._run, derived=derived, acted=False)
             return self._save(ExecutionStatus.HUMAN_ESCALATED)
+        if irreversible:
+            # A test environment: the step is performed, so what follows it (the receipt,
+            # values that exist only afterwards) is learned too. Its dialog is accepted.
+            self._logger.irreversible_executed(step.sequence_index)
+            self._session.accepting_dialogs = True
 
         try:
-            read = await self._perform(kind, element, value, args.get("output_key"))
+            await self._perform(kind, element, value)
         except ActionFailed as failed:
             return _Next(f"Failed: {failed}.", call_id, is_error=True)
         except PlaywrightTimeoutError:
             return _Next("Failed: the page did not respond in time.", call_id, is_error=True)
+        finally:
+            self._session.accepting_dialogs = False
         if not self._on_allowlist():
             await self._page.go_back()
             return self._violation(call_id)
         await self._recorder.commit(step, self._page, self._run, derived=derived)
         if kind == ActionType.CLICK:
             self._asserted_here = False
-        done = f'Done: read "{read}".' if kind == ActionType.EXTRACT_TEXT else "Done."
+        done = "Done: this irreversible step was performed (test environment)." if irreversible else "Done."
         return _Next(self._with_dialogs(done), call_id)
 
-    async def _perform(self, kind: ActionType, element: PageElement, value: Optional[str],
-                       output_key: Optional[str]) -> Optional[str]:
+    async def _perform(self, kind: ActionType, element: PageElement, value: Optional[str]) -> None:
         timeout_ms = action_timeout_ms(self._time_left_ms())
         if kind == ActionType.CLICK:
             await click(element.handle, timeout_ms=timeout_ms)
             await self._page.wait_for_load_state("load", timeout=timeout_ms)
         elif kind == ActionType.TYPE:
             await type_text(element.handle, value or "", self._values, timeout_ms=timeout_ms)
-        elif kind == ActionType.SELECT:
-            await select_option(element.handle, value or "", self._values, timeout_ms=timeout_ms)
         else:
-            read = " ".join((await element.handle.inner_text()).split())
-            self._outputs[output_key] = read
-            return read
-        return None
+            await select_option(element.handle, value or "", self._values, timeout_ms=timeout_ms)
 
     async def _dismiss(self, step: Step, element: PageElement, reason: str, call_id: str) -> Union[_Next, ExecutionResult]:
         # Closing an overlay is never recorded: it may not appear on the next run, and
@@ -418,6 +495,7 @@ class _Discovery:
         if error is None and code is not None:
             error = ErrorDetail(code=code, message=message or code)
         duration_ms = int((time.monotonic() - self._started) * 1000)
+        self._logger.run_usage(**self._usage, estimated_cost_usd=estimated_cost_usd(env.anthropic_model, self._usage))
         self._logger.execution_ended(status.value, error.code if error else None, error.message if error else None)
         self._logger.summary_metrics(duration_ms, len(self._recorder.steps), self._retries, 0)
         return ExecutionResult(
@@ -434,6 +512,9 @@ class _Discovery:
             error=error,
         )
 
+    def _unread_outputs(self) -> list[str]:
+        return [output.key for output in self._contract.output_definitions if output.key not in self._outputs]
+
     def _on_allowlist(self) -> bool:
         try:
             check_domain(self._page.url)
@@ -445,6 +526,22 @@ class _Discovery:
         dialogs = self._session.dialogs[self._dialogs_seen:]
         self._dialogs_seen = len(self._session.dialogs)
         return f"{text} A dialog was dismissed: {'; '.join(dialogs)}." if dialogs else text
+
+    def _log_decision(self, call: Any) -> None:
+        # What the model chose and why, every turn: a refused or failed action records no
+        # step, so without this line the turn would be invisible in the evidence.
+        args = dict(call.input)
+        why = args.get("reason") or args.get("summary") or args.get("detail") or ""
+        self._logger.model_action(self._turns, call.name, args.get("element"), self._clean(str(why)))
+
+    def _count_usage(self, reply: ModelReply) -> None:
+        # Every call's tokens are logged, so the real cost of a run (and whether caching
+        # works) shows in the evidence, not in an estimate.
+        if reply.usage is None:
+            return
+        self._logger.model_usage(self._turns, **{key: reply.usage[key] for key in _USAGE_KEYS})
+        for key in _USAGE_KEYS:
+            self._usage[key] += reply.usage[key]
 
     def _log_fallbacks(self, reply: ModelReply) -> None:
         # Every turn another model answered is recorded with both models' names.
