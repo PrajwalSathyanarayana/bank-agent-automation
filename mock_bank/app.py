@@ -1,7 +1,9 @@
 import json
 import secrets
 import sys
+import time
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
 
 # Running this as a plain script (python mock_bank/app.py) only puts
@@ -9,7 +11,7 @@ from urllib.parse import urlparse
 # repo root explicitly so `src.config.env` resolves regardless of cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from flask import Flask
+from flask import Flask, request
 
 from src.config.env import env
 
@@ -49,13 +51,28 @@ def check_member_data(data: dict) -> None:
                 )
 
 
-def create_app() -> Flask:
+def create_app(renamed_menu: Optional[bool] = None, slow_pages_ms: Optional[int] = None) -> Flask:
+    """The mock bank. The two test switches come from the settings unless given here, so a
+    test can start a switched bank beside the normal one."""
     app = Flask(__name__)
     app.config["SECRET_KEY"] = env.mock_bank_secret_key.get_secret_value()
     # New value every startup; sessions from a previous run are rejected.
     app.config["BOOT_ID"] = secrets.token_hex(8)
     app.config["MEMBER_DATA"] = load_member_data()
     app.config["ACTIVITY"] = Activity()
+    app.config["RENAMED_MENU"] = env.mock_bank_renamed_menu if renamed_menu is None else renamed_menu
+    app.config["SLOW_PAGES_MS"] = env.mock_bank_slow_pages_ms if slow_pages_ms is None else slow_pages_ms
+
+    @app.context_processor
+    def menu_labels() -> dict:
+        # A new vendor version relabels a menu item; its address stays the same.
+        return {"member_search_label": "Find Member" if app.config["RENAMED_MENU"] else "Member Search"}
+
+    @app.before_request
+    def slow_pages() -> None:
+        # Pages only: stylesheets and scripts arrive at their usual speed.
+        if app.config["SLOW_PAGES_MS"] and not request.path.startswith("/static/"):
+            time.sleep(app.config["SLOW_PAGES_MS"] / 1000)
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(member_bp)
@@ -64,8 +81,21 @@ def create_app() -> Flask:
     return app
 
 
+def switches_on(app: Flask) -> list[str]:
+    """The test switches this bank runs with, for its start-up message."""
+    on = []
+    if app.config["RENAMED_MENU"]:
+        on.append('menu item "Member Search" relabelled "Find Member"')
+    if app.config["SLOW_PAGES_MS"]:
+        on.append(f"every page served {app.config['SLOW_PAGES_MS']} ms late")
+    return on
+
+
 if __name__ == "__main__":
     app = create_app()
+    # A switched bank must never look like the normal one.
+    for switch in switches_on(app):
+        print(f"TEST SWITCH ON: {switch}")
     # Bind to MOCK_BANK_BASE_URL's host/port so the printed link, the
     # allowlist's permitted domain, and the config always agree.
     base = urlparse(env.mock_bank_base_url)

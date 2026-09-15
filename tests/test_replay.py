@@ -416,11 +416,11 @@ def storage(tmp_path, monkeypatch) -> Path:
 @pytest.fixture
 def saved_bill_pay(storage, mock_bank_url):
     """Save a signed bill pay artifact (bill pay's real contract) and return its file."""
-    def save(steps=None) -> Path:
+    def save(steps=None, bank_url=None) -> Path:
         now = datetime.now(timezone.utc)
         artifact = Artifact(
             metadata=ArtifactMetadata(capability=BILL_PAY, description=BILL.description, version="3.0.0",
-                                      target_url=f"{mock_bank_url}/login", created_timestamp=now,
+                                      target_url=f"{bank_url or mock_bank_url}/login", created_timestamp=now,
                                       last_updated_timestamp=now),
             input_parameters=BILL.input_parameters, output_definitions=BILL.output_definitions,
             credentials=BILL.credentials, known_outcomes=BILL.known_outcomes, allowed_paths=BILL.allowed_paths,
@@ -606,3 +606,51 @@ async def test_only_a_plain_capability_name_is_looked_up(replay_logger, monkeypa
 
 def _no_browser(*args, **kwargs):
     raise AssertionError("no browser should open")
+
+
+# --- a changed bank: the mock bank's test switches ---
+
+# Step 4 exactly as discovery recorded it in v3.0.0: the link's text, its address, its menu position.
+DISCOVERED_SEARCH_LOCATORS = [
+    Locator(type=LocatorType.TEXT_CONTENT, value="Member Search", priority=0),
+    Locator(type=LocatorType.CSS, value='a[href="/search"]', priority=1),
+    Locator(type=LocatorType.CSS, value="td.nav > div:nth-of-type(3) > a:nth-of-type(1)", priority=2),
+]
+
+
+@pytest.mark.anyio
+async def test_the_discovered_locators_survive_a_relabelled_menu(saved_bill_pay, switched_bank, dashboard_popup,
+                                                                replay_logger):
+    dashboard_popup(False)
+    saved_bill_pay(_bill_pay_steps(search_locators=DISCOVERED_SEARCH_LOCATORS),
+                   bank_url=switched_bank(renamed_menu=True))
+    result = await _replay(replay_logger)
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    assert result.step_traces[4].locator_priority == 1
+    tried = [(line["priority"], line["matches"]) for line in _log_lines(replay_logger)
+             if line["event_type"] == "LOCATOR_EVALUATED" and line["step_index"] == 4]
+    assert tried == [(0, 0), (1, 1)]  # the text no longer matches; the address still does
+
+
+@pytest.mark.anyio
+async def test_a_slow_bank_is_waited_for(saved_bill_pay, switched_bank, dashboard_popup, replay_logger):
+    dashboard_popup(False)
+    saved_bill_pay(bank_url=switched_bank(slow_pages_ms=1000))
+    result = await _replay(replay_logger, member="40412", payee="Canyon Ridge Mortgage Co", amount=10.0)
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    assert result.duration_ms >= 5000  # every page arrived a second late, and replay waited
+
+
+@pytest.mark.anyio
+async def test_a_bank_slower_than_the_page_limit_ends_in_a_clear_failure(saved_bill_pay, switched_bank,
+                                                                        dashboard_popup, replay_logger,
+                                                                        monkeypatch):
+    # A click waits for the page it leads to, so what limits a slow bank is the page limit
+    # (30 s); here it is 1.5 s and every page comes 2.5 s late, so the test stays quick.
+    dashboard_popup(False)
+    monkeypatch.setattr(settings, "discovery_page_action_timeout_ms", 1500)
+    saved_bill_pay(bank_url=switched_bank(slow_pages_ms=2500))
+    result = await _replay(replay_logger)
+    assert (result.status, result.error.code) == (ExecutionStatus.TECHNICAL_FAIL, "PAGE_TIMEOUT")
+    assert (result.failure.step_index, result.failure.expected, result.failure.observed) == (
+        0, "the start page within 1.5 s", "it didn't arrive in time")

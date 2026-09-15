@@ -1,11 +1,12 @@
 import copy
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mock_bank"))
-from app import check_member_data, create_app, load_member_data  # noqa: E402
+from app import check_member_data, create_app, load_member_data, switches_on  # noqa: E402
 
 
 @pytest.fixture
@@ -386,3 +387,37 @@ def _seed_with(edit):
 def test_startup_check_rejects_contradictory_data(edit, message):
     with pytest.raises(ValueError, match=message):
         check_member_data(_seed_with(edit))
+
+
+# --- test switches ---
+
+def _signed_in(app):
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "admin123"})
+    return client
+
+
+def test_the_relabelled_menu_switch_changes_only_the_menu_wording():
+    normal = _signed_in(create_app(renamed_menu=False)).get("/dashboard").data
+    relabelled = _signed_in(create_app(renamed_menu=True)).get("/dashboard").data
+    assert b'<a href="/search">Member Search</a>' in normal
+    assert b'<a href="/search">Find Member</a>' in relabelled
+    assert b"Member Search" not in relabelled
+
+
+def test_the_slow_pages_switch_delays_pages_but_not_stylesheets():
+    client = create_app(slow_pages_ms=300).test_client()
+    started = time.monotonic()
+    client.get("/static/css/legacy.css")
+    stylesheet_s = time.monotonic() - started
+    started = time.monotonic()
+    client.get("/login")
+    page_s = time.monotonic() - started
+    assert page_s >= 0.3
+    assert stylesheet_s < 0.3
+
+
+def test_the_bank_names_the_switches_it_runs_with():
+    assert switches_on(create_app(renamed_menu=False, slow_pages_ms=0)) == []
+    assert switches_on(create_app(renamed_menu=True, slow_pages_ms=250)) == [
+        'menu item "Member Search" relabelled "Find Member"', "every page served 250 ms late"]

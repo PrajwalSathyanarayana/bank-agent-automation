@@ -24,7 +24,7 @@ def pytest_collection_modifyitems(config, items):
     # A test that uses a browser page or the bank server is a browser test; no test has
     # to say so itself.
     for item in items:
-        if {"page", "browser", "mock_bank_url"} & set(item.fixturenames):
+        if {"page", "browser", "mock_bank_url", "switched_bank"} & set(item.fixturenames):
             item.add_marker(pytest.mark.browser)
 
 
@@ -71,6 +71,23 @@ async def page(browser, mock_bank_url):
     page = await context.new_page()
     yield page
     await context.close()
+
+
+@pytest.fixture
+def switched_bank():
+    """Call with test switches (renamed_menu=True, slow_pages_ms=...) to start a separate
+    in-process bank beside the normal one; returns its address."""
+    servers = []
+
+    def start(**switches) -> str:
+        server = make_server("localhost", 0, create_app(**switches), threaded=True)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return f"http://localhost:{server.server_port}"
+
+    yield start
+    for server in servers:
+        server.shutdown()
 
 
 @pytest.fixture

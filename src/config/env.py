@@ -25,6 +25,10 @@ class Env(BaseSettings):
     auto_execute_limit: Decimal = Field(default=Decimal("1000.00"), gt=0, decimal_places=2)
     auto_execute_currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
     mock_bank_secret_key: SecretStr
+    # Test-only switches for the mock bank, off unless set: the menu item "Member Search"
+    # relabelled "Find Member" (a new vendor version), and every page served this late.
+    mock_bank_renamed_menu: bool = False
+    mock_bank_slow_pages_ms: int = Field(default=0, ge=0)
     mock_bank_username: str
     mock_bank_password: SecretStr
     artifact_signing_key: SecretStr = Field(min_length=32)

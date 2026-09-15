@@ -113,6 +113,11 @@ def test_an_unclear_auto_pay_limit_is_rejected(setting):
         Env(_env_file="nonexistent.env", **REQUIRED, **setting)
 
 
+def test_the_mock_bank_test_switches_are_off_unless_set():
+    configured = Env(_env_file="nonexistent.env", **REQUIRED)
+    assert (configured.mock_bank_renamed_menu, configured.mock_bank_slow_pages_ms) == (False, 0)
+
+
 def test_short_signing_key_is_rejected():
     with pytest.raises(ValidationError) as exc_info:
         Env(

@@ -238,14 +238,19 @@ class _Replay:
     async def _open_start(self, record: _StepRecord) -> None:
         metadata = self._artifact.metadata
         start = metadata.tenant_override_url or metadata.target_url
+        timeout_ms = action_timeout_ms(self._time_left_ms())
         try:
             check_route(start, self._artifact.allowed_paths)
-            await self._session.open(start, timeout_ms=action_timeout_ms(self._time_left_ms()))
+            await self._session.open(start, timeout_ms=timeout_ms)
             # The bank may redirect the start page elsewhere: where it landed counts.
             check_route(self._page.url, self._artifact.allowed_paths)
         except AllowlistViolation as violation:
             raise _Stop(await self._failure(record, ExecutionStatus.HARD_ABORT, "ALLOWLIST_VIOLATION",
                                             CheckFailed("a page this capability may visit", str(violation))))
+        except PlaywrightTimeoutError:
+            # A bank too slow to answer at all: a clear failure, not a crash.
+            raise _Stop(await self._failure(record, ExecutionStatus.TECHNICAL_FAIL, "PAGE_TIMEOUT", CheckFailed(
+                f"the start page within {timeout_ms / 1000:g} s", "it didn't arrive in time")))
 
     async def _clear_interruptions(self, record: _StepRecord) -> None:
         # Looked for before acting, so a popup is closed before it can block a click
