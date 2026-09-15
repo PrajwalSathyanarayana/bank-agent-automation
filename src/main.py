@@ -5,8 +5,9 @@
 
 discover runs one real discovery of the bill pay capability; it calls the Claude API,
 which costs money. replay runs the capability's latest trusted artifact with no model at
-all; with --operator, a run that needs a person hands them its own window instead of
-stopping. Choosing between them by itself, from a goal sentence, comes with the router.
+all. With --operator (either command), a run that needs a person hands them its own window
+instead of stopping; in discovery, what they do is recorded as steps of the artifact.
+Choosing between them by itself, from a goal sentence, comes with the router.
 """
 import argparse
 import asyncio
@@ -112,8 +113,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                      help=f"a lower step limit for this run (default {settings.discovery_max_steps})")
     again = commands.add_parser("replay", help="replay the bill pay capability's latest trusted artifact (no model)")
     _bill_pay_inputs(again)
-    again.add_argument("--operator", action="store_true",
-                       help="when the run needs a person, hand them this run's window (shows the window)")
     return parser.parse_args(argv)
 
 
@@ -123,6 +122,8 @@ def _bill_pay_inputs(command: argparse.ArgumentParser) -> None:
     command.add_argument("--amount", required=True, type=float)
     command.add_argument("--payee", required=True, help='the payee as named on the page, e.g. "Sunbelt Electric Co"')
     command.add_argument("--headed", action="store_true", help="show the browser window")
+    command.add_argument("--operator", action="store_true",
+                         help="when the run needs a person, hand them this run's window (shows the window)")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -138,7 +139,11 @@ async def _discover(args: argparse.Namespace) -> int:
     request = DiscoveryRequest(
         CONTRACTS[BILL_PAY], {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee}
     )
-    result = await discover(request, ClaudeModel(), logger, headless=not args.headed, max_steps=args.max_steps)
+    async with AsyncExitStack() as stack:
+        operator = await _operator(stack, args.operator)
+        # A person can only take over a window they can see.
+        result = await discover(request, ClaudeModel(), logger, headless=not (args.headed or args.operator),
+                                max_steps=args.max_steps, operator=operator)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.HUMAN_ESCALATED) else 1
@@ -151,10 +156,7 @@ async def _replay(args: argparse.Namespace) -> int:
     logger = RunLogger("REPLAY", capability=BILL_PAY)
     request = ReplayRequest(BILL_PAY, {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee})
     async with AsyncExitStack() as stack:
-        operator = None
-        if args.operator:
-            operator = OperatorSetup(announcer=await _open_feed(stack))
-            print("If the run needs a person, the browser window will show a bar asking them to take over.")
+        operator = await _operator(stack, args.operator)
         # A person can only take over a window they can see.
         result = await replay(request, logger, headless=not (args.headed or args.operator), operator=operator)
     print(result.to_json())
@@ -165,6 +167,15 @@ async def _replay(args: argparse.Namespace) -> int:
     finished = (last_handoff is not None and last_handoff.resolution == HandoffResolution.MANUAL_COMPLETED
                 and result.irreversible_step != "unknown")
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.BUSINESS_OUTCOME) or finished else 1
+
+
+async def _operator(stack: AsyncExitStack, wanted: bool) -> Optional[OperatorSetup]:
+    # A person at this machine, if asked for: the feed opened for the run, and a word on what to expect.
+    if not wanted:
+        return None
+    setup = OperatorSetup(announcer=await _open_feed(stack))
+    print("If the run needs a person, the browser window will show a bar asking them to take over.")
+    return setup
 
 
 async def _open_feed(stack: AsyncExitStack) -> Optional[HandoffFeed]:

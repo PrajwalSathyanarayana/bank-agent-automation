@@ -245,11 +245,30 @@ def test_a_busy_feed_port_is_reported_and_the_run_goes_on_without_it(monkeypatch
     assert "carrying on without announcements" in capsys.readouterr().out
 
 
-def test_only_replay_takes_an_operator_for_now():
-    assert parse_args(REPLAY_ARGS).operator is False
-    with pytest.raises(SystemExit):
-        parse_args(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co",
-                    "--operator"])
+DISCOVER_ARGS = ["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"]
+
+
+def test_both_commands_take_an_operator():
+    assert (parse_args(REPLAY_ARGS).operator, parse_args(DISCOVER_ARGS).operator) == (False, False)
+    assert parse_args([*DISCOVER_ARGS, "--operator"]).operator is True
+
+
+def test_discover_with_an_operator_shows_the_window_and_passes_the_feed(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
+    monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
+    monkeypatch.setattr(env, "ws_handoff_port", 0)  # a free port, never a real run's
+    monkeypatch.setattr(main_module, "ClaudeModel", lambda: object())  # the run is faked: no model is called
+    asked = []
+
+    async def fake_discover(request, model, logger, *, headless, max_steps, operator=None):
+        asked.append((headless, operator))
+        return _result(ExecutionStatus.SUCCESS, logger).model_copy(update={"mode": "DISCOVERY"})
+
+    monkeypatch.setattr(main_module, "discover", fake_discover)
+    assert main([*DISCOVER_ARGS, "--operator"]) == 0
+    [(headless, operator)] = asked
+    assert headless is False and isinstance(operator.announcer, HandoffFeed)
+    assert "take over" in capsys.readouterr().out
 
 
 def test_the_replay_command_says_when_the_bank_isnt_running(monkeypatch, capsys):
