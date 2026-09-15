@@ -13,7 +13,10 @@ from src.config.settings import settings
 from src.locating.checks import find_phrase, phrase_matches, value_beside
 from src.locating.resolver import resolve
 from src.handoff.ws_server import FeedUnavailable, HandoffFeed
+from src.intake import IntakeAnswer, IntakeUnavailable
 from src.main import BILL_PAY, CONTRACTS, main, parse_args
+from src.observability.logger import RunLogger
+from src.router import Handled
 from src.types.result_schema import (
     BusinessOutcome,
     ErrorDetail,
@@ -246,6 +249,58 @@ def test_a_busy_feed_port_is_reported_and_the_run_goes_on_without_it(monkeypatch
 
 
 DISCOVER_ARGS = ["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"]
+RUN_ARGS = ["run", "For member 10234, pay 50 to Sunbelt Electric Co"]
+
+
+def test_the_run_command_takes_the_request_in_words_and_the_window_options():
+    args = parse_args([*RUN_ARGS, "--headed", "--operator"])
+    assert (args.command, args.request, args.headed, args.operator) == (
+        "run", "For member 10234, pay 50 to Sunbelt Electric Co", True, True)
+
+
+def _stub_run(monkeypatch, tmp_path, handled_or_error):
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
+    monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
+    # The engines are stubbed below: no model is called.
+    monkeypatch.setattr(main_module, "ClaudeModel", lambda: object())
+    monkeypatch.setattr(main_module, "ClaudeIntakeModel", lambda: object())
+    asked = []
+
+    async def fake_handle(request, **options):
+        asked.append((request, options))
+        if isinstance(handled_or_error, Exception):
+            raise handled_or_error
+        # A function builds the answer only now, after the evidence folder points at tmp_path.
+        return handled_or_error() if callable(handled_or_error) else handled_or_error
+
+    monkeypatch.setattr(main_module, "handle", fake_handle)
+    return asked
+
+
+def test_a_request_that_isnt_run_prints_why_and_exits_3(monkeypatch, capsys, tmp_path):
+    answer = IntakeAnswer("not_supported", "I can't do that yet. The tasks I know are:\n- …")
+    asked = _stub_run(monkeypatch, tmp_path, Handled(answer))
+    assert main(RUN_ARGS) == 3
+    assert asked[0][0] == "For member 10234, pay 50 to Sunbelt Electric Co"
+    assert capsys.readouterr().out.startswith("I can't do that yet.")
+
+
+def test_a_request_that_is_run_prints_what_was_understood_then_the_result(monkeypatch, capsys, tmp_path):
+    answer = IntakeAnswer("run", "Understood as: Pay $50.00 to Sunbelt Electric Co for member 10234.",
+                          capability=BILL_PAY, inputs={"member_id": "10234", "amount": 50.0,
+                                                       "payee_name": "Sunbelt Electric Co"})
+    asked = _stub_run(monkeypatch, tmp_path, lambda: Handled(
+        answer, _result(ExecutionStatus.SUCCESS, RunLogger("REPLAY", capability=BILL_PAY))))
+    assert main(RUN_ARGS) == 0
+    assert asked[0][1]["headless"] is True and asked[0][1]["operator"] is None
+    out = capsys.readouterr().out
+    assert out.startswith("Understood as: Pay $50.00") and '"status": "SUCCESS"' in out
+
+
+def test_an_intake_that_cant_be_reached_runs_nothing_and_says_so(monkeypatch, capsys, tmp_path):
+    _stub_run(monkeypatch, tmp_path, IntakeUnavailable("APIConnectionError"))
+    assert main(RUN_ARGS) == 2
+    assert "nothing was run" in capsys.readouterr().out
 
 
 def test_both_commands_take_an_operator():

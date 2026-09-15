@@ -85,6 +85,14 @@ _PERSON_ENDINGS = {
 }
 
 
+def asked_line(capability: str, goal: str, inputs: Mapping[str, str]) -> str:
+    """What was asked, in a sentence ("Pay $50.00 to Sunbelt Electric Co for member 10234.").
+    inputs are already as a person reads them; a capability without its own wording is
+    described by its goal."""
+    wording = WORDING.get(capability)
+    return _fill(wording.asked if wording else "", inputs) or (f"Asked: {goal}" if goal else f"Asked: {capability}.")
+
+
 def reason_for(code: str) -> str:
     """Why a run stopped or needs a person, in plain words, e.g. for the operator's bar."""
     return ESCALATIONS.get(code) or _reason(code)
@@ -115,7 +123,7 @@ def summarize(
     wording = WORDING.get(capability)
     action = wording.action if wording else "irreversible step"
     values = {**inputs, **outputs}
-    asked = _fill(wording.asked if wording else "", values) or (f"Asked: {goal}" if goal else f"Asked: {capability}.")
+    asked = asked_line(capability, goal, values)
     done = _fill(wording.done if wording else "", values) or f"Done: {goal}"
     results = _fill(wording.results if wording else "", values) or _listed(outputs)
     reason = escalation or (error.code if error else "")
