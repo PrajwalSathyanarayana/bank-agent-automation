@@ -7,7 +7,6 @@ its label, accessible name, scoped versions of the attribute candidates, and pos
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -17,6 +16,8 @@ from pydantic import SecretStr
 
 from src.discovery.perception import ACTION_KINDS, ElementFacts, PageElement, element_kind
 from src.locating.resolver import UnfillableLocator, css_string, resolve
+# Shared with replay's text checks; still importable from here for the backstop and tests.
+from src.locating.values import number_pattern
 from src.types.placeholders import iter_placeholders
 from src.types.step_schema import Locator, LocatorType
 
@@ -281,24 +282,6 @@ def scan(candidate: Candidate, run: RunValues) -> ScanOutcome:
         if any(word.search(text) for text in texts):
             return ScanOutcome(None, "carries the bank username")
     return ScanOutcome(_stored_value(candidate, stored_address))
-
-
-def number_pattern(number: float) -> re.Pattern[str]:
-    """Every common way a page shows this number, matched only as a whole number.
-
-    50.0 matches "50", "50.0" and "50.00" ("$50.00" too); 1240.5 matches "1240.5",
-    "1240.50", "1,240.5" and "1,240.50". Never inside a longer number: 50 doesn't match
-    within 150 or 50.75. Shared with the save-time backstop scan, so both use one rule.
-    """
-    value = Decimal(str(number))
-    forms = {format(value.normalize(), "f")}
-    for places in (0, 1, 2):
-        # Only as many decimal places as the number really has: 50.75 is never "50.8".
-        if value == value.quantize(Decimal(1).scaleb(-places)):
-            forms.add(f"{value:.{places}f}")
-            forms.add(f"{value:,.{places}f}")
-    alternatives = "|".join(re.escape(form) for form in sorted(forms, key=len, reverse=True))
-    return re.compile(rf"(?<![\d.,])(?:{alternatives})(?![\d]|[.,]\d)")
 
 
 async def prove(page: Page, target: ElementHandle, locator: Locator, values: Mapping[str, str]) -> Verdict:

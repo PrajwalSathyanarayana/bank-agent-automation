@@ -87,6 +87,24 @@ def read_number(text: str) -> Union[int, float]:
     return float(f"{digits}.{found['fraction']}")
 
 
+def number_pattern(number: float) -> re.Pattern[str]:
+    """Every common way a page shows this number, matched only as a whole number.
+
+    50.0 matches "50", "50.0" and "50.00" ("$50.00" too); 1240.5 matches "1240.5",
+    "1240.50", "1,240.5" and "1,240.50". Never inside a longer number: 50 doesn't match
+    within 150 or 50.75. One rule for discovery's scans and replay's text checks.
+    """
+    value = Decimal(str(number))
+    forms = {format(value.normalize(), "f")}
+    for places in (0, 1, 2):
+        # Only as many decimal places as the number really has: 50.75 is never "50.8".
+        if value == value.quantize(Decimal(1).scaleb(-places)):
+            forms.add(f"{value:.{places}f}")
+            forms.add(f"{value:,.{places}f}")
+    alternatives = "|".join(re.escape(form) for form in sorted(forms, key=len, reverse=True))
+    return re.compile(rf"(?<![\d.,])(?:{alternatives})(?![\d]|[.,]\d)")
+
+
 def _shown(text: str) -> str:
     # Enough of the page's text to recognise it, never a whole page.
     flat = " ".join(text.split())

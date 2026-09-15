@@ -9,8 +9,10 @@ from src.locating.checks import (
     is_password_box,
     phrase_matches,
     shows_phrase,
+    text_pattern,
     value_beside,
 )
+from src.types.placeholders import MissingValue
 from src.locating.resolver import UnfillableLocator, css_string, fill, resolve
 from src.locating.values import UnreadableValue, read_money, read_number, read_output
 from src.types.artifact_schema import OutputParamDefinition, OutputType
@@ -332,6 +334,34 @@ def test_a_refusal_quotes_the_page_text_but_never_a_whole_page():
     with pytest.raises(UnreadableValue) as refused:
         read_money("x" * 500, "USD")
     assert len(str(refused.value)) < 120
+
+
+# --- checked text with this run's values ---
+
+@pytest.mark.parametrize(
+    "text, shown, matches",
+    [
+        pytest.param("Amount: ${amount}", "Amount: $50.00", True, id="a number in its usual form"),
+        pytest.param("Amount: ${amount}", "amount: $50", True, id="another form, any case"),
+        pytest.param("Amount: ${amount}", "Amount: $150.00", False, id="never inside a longer number"),
+        pytest.param("Amount: ${amount}", "Amount: $50.75", False, id="never a different amount"),
+        pytest.param("Payment to {payee_name}", "Payment to Sunbelt Electric Co today", True,
+                     id="a text value word for word"),
+        pytest.param("Payment to {payee_name}", "Payment to Sunbelt", False, id="only part of the text value"),
+        pytest.param("Code {{A}}", "Code {A}", True, id="doubled braces are literal"),
+        pytest.param("New  Checking Balance:", "New Checking\xa0Balance: $2400.32", True, id="any run of spaces"),
+        pytest.param("Payment Submitted", "Payment Submittedly", False, id="whole words only"),
+    ],
+)
+def test_checked_text_is_filled_with_this_runs_values(text, shown, matches):
+    pattern = text_pattern(text, {"payee_name": "Sunbelt Electric Co"}, {"amount": 50.0})
+    assert bool(pattern.search(shown)) is matches
+
+
+def test_checked_text_needs_a_value_for_every_placeholder_and_some_words():
+    with pytest.raises(MissingValue):
+        text_pattern("Member {member_id}", {}, {})
+    assert text_pattern("   ", {}, {}) is None
 
 
 # --- the value beside a label ---
