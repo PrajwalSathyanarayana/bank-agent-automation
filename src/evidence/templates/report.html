@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ result.capability.replace('_', ' ') | title }} — {{ result.mode | title }} report</title>
+<style>
+  :root {
+    --ok: #1a7f37; --ok-bg: #dafbe1;
+    --answer: #0969da; --answer-bg: #ddf4ff;
+    --person: #9a6700; --person-bg: #fff8c5;
+    --fail: #cf222e; --fail-bg: #ffebe9;
+    --ink: #1f2328; --muted: #59636e; --line: #d1d9e0; --panel: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px; background: #fff; color: var(--ink);
+    font: 15px/1.5 -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 32px 0 10px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 20px; }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.answer { background: var(--answer-bg); color: var(--answer); }
+  .badge.person { background: var(--person-bg); color: var(--person); }
+  .badge.fail { background: var(--fail-bg); color: var(--fail); }
+  .badge.mode { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+  .summary {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 16px 18px; font-size: 1.05rem;
+  }
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .alert {
+    border-radius: 8px; padding: 14px 16px; border: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .alert.fail { background: var(--fail-bg); border-color: #ffc1bc; }
+  .alert.person { background: var(--person-bg); border-color: #f2d675; }
+  .alert.answer { background: var(--answer-bg); border-color: #b6e3ff; }
+  .alert code { font-size: 0.85em; }
+  .shots { display: flex; flex-wrap: wrap; gap: 12px; }
+  .shots figure { margin: 0; width: 260px; }
+  .shots img {
+    width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block;
+  }
+  .shots figcaption { color: var(--muted); font-size: 0.8rem; margin-top: 4px; word-break: break-all; }
+  footer { margin-top: 36px; color: var(--muted); font-size: 0.9rem; }
+  footer a { color: inherit; }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<main>
+  <h1>{{ result.capability.replace('_', ' ') | title }}</h1>
+  <p class="sub">Run {{ result.run_id }}</p>
+  <div class="badges">
+    <span class="badge mode">{{ result.mode | title }}</span>
+    <span class="badge {{ status_class }}">{{ status_label }}</span>
+    {% if result.irreversible_step %}
+      <span class="badge mode">Payment: {{ result.irreversible_step.replace('_', ' ') }}</span>
+    {% endif %}
+    {% if result.integrity_verified %}<span class="badge ok">Signature verified</span>{% endif %}
+  </div>
+
+  <p class="summary">{{ result.summary or "(no summary)" }}</p>
+
+  <h2>Run details</h2>
+  <dl class="facts">
+    <dt>Started</dt><dd>{{ result.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') }}</dd>
+    <dt>Finished</dt><dd>{{ result.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') }}</dd>
+    <dt>Duration</dt><dd>{{ '%.1f' | format(duration_s) }} s</dd>
+    {% if result.artifact_version %}<dt>Artifact version</dt><dd>{{ result.artifact_version }}</dd>{% endif %}
+  </dl>
+
+  {% if result.terminal_outputs %}
+  <h2>Values read</h2>
+  <table>
+    <tr><th>Key</th><th>Value</th></tr>
+    {% for key, value in result.terminal_outputs.items() %}
+    <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if result.outcome %}
+  <h2>The bank's answer</h2>
+  <div class="alert answer"><code>{{ result.outcome.code }}</code> — {{ result.outcome.description }}</div>
+  {% endif %}
+
+  {% if result.error %}
+  <h2>{{ "Stopped" if result.status.value != "HUMAN_ESCALATED" else "Why a person was needed" }}</h2>
+  <div class="alert {{ 'person' if result.status.value == 'HUMAN_ESCALATED' else 'fail' }}">
+    <code>{{ result.error.code }}</code> — {{ result.error.message }}
+  </div>
+  {% endif %}
+
+  {% if result.failure %}
+  <h2>Where it broke</h2>
+  <div class="alert fail">
+    Step {{ result.failure.step_index }} ({{ result.failure.step_description }})<br>
+    Expected: {{ result.failure.expected }}<br>
+    Observed: {{ result.failure.observed }}
+  </div>
+  {% endif %}
+
+  {% if result.handoff_events %}
+  <h2>A person in the loop</h2>
+  <table>
+    <tr><th>Trigger</th><th>Resolution</th><th>Duration</th><th>Actions taken</th></tr>
+    {% for h in result.handoff_events %}
+    <tr>
+      <td>{{ h.trigger_reason }}</td>
+      <td>{{ h.resolution.value if h.resolution else "—" }}</td>
+      <td>{{ (h.duration_ms / 1000) | round(1) ~ " s" if h.duration_ms is not none else "—" }}</td>
+      <td>{{ h.person_actions if h.person_actions is not none else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <h2>Steps</h2>
+  {% if result.step_traces %}
+  <table>
+    <tr><th>#</th><th>Status</th><th>Attempts</th><th>Locator</th><th>Recoveries</th><th>Note</th></tr>
+    {% for step in result.step_traces %}
+    <tr>
+      <td>{{ step.sequence_index }}</td>
+      <td>{{ step.status.value }}</td>
+      <td>{{ step.attempt_count }}</td>
+      <td>{{ "primary" if step.locator_priority == 0 else ("fallback #" ~ step.locator_priority if step.locator_priority is not none else "—") }}</td>
+      <td>{{ step.recovery_logs | length or "—" }}</td>
+      <td>{{ step.error_message or "" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No steps ran.</p>
+  {% endif %}
+
+  {% if screenshots %}
+  <h2>Screenshots</h2>
+  <div class="shots">
+    {% for name in screenshots %}
+    <figure>
+      <img src="screenshots/{{ name }}" alt="{{ name }}" loading="lazy">
+      <figcaption>{{ name }}</figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <footer>
+    Raw evidence in this same folder: <a href="result.json">result.json</a> ·
+    <a href="log.json">log.json</a>
+  </footer>
+</main>
+</body>
+</html>
