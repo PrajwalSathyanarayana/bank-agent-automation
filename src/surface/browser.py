@@ -9,7 +9,7 @@ while a person has control of the session, when every dialog is left for them to
 """
 from collections.abc import Awaitable, Callable, Mapping
 from decimal import Decimal
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from urllib.parse import urlsplit
 
 from playwright.async_api import Browser, Dialog, ElementHandle, Page, Playwright, async_playwright
@@ -112,15 +112,29 @@ async def click(element: ElementHandle, *, timeout_ms: int) -> None:
 
 
 async def type_text(
-    element: ElementHandle, text: str, values: Mapping[str, PlaceholderValue], *, timeout_ms: int
+    element: ElementHandle, text: str, values: Mapping[str, PlaceholderValue], *, timeout_ms: int,
+    tracing: Any = None,
 ) -> None:
     """Type the text into the element, its placeholders filled at the last moment.
 
-    The only place a secret's real value exists: unwrapped here, typed, and dropped. A
-    failure becomes ActionFailed with a fixed message and nothing attached.
+    The only place a secret's real value exists: unwrapped here, typed, and dropped. When a
+    secret is among this text's placeholders and tracing is a context's tracing object
+    (BrowserSession.tracing; Playwright doesn't export a public type for it), this one
+    keystroke is left out of it - paused just for it (nothing recorded: no snapshot, no
+    screenshot, no network - not redacted after the fact), resumed straight after, win or
+    lose. A failure becomes ActionFailed with a fixed message and nothing attached.
     """
-    await _guarded(element.fill(fill_text(text, _unwrapped(text, values)), timeout=timeout_ms),
-                   "typing into the element failed")
+    has_secret = any(isinstance(values.get(name), SecretStr) for name, _, _ in iter_placeholders(text))
+    fill = _guarded(element.fill(fill_text(text, _unwrapped(text, values)), timeout=timeout_ms),
+                    "typing into the element failed")
+    if has_secret and tracing is not None:
+        await tracing.stop_chunk()
+        try:
+            await fill
+        finally:
+            await tracing.start_chunk()
+    else:
+        await fill
 
 
 async def select_option(
@@ -139,12 +153,16 @@ class BrowserSession:
     way out, after an error too.
     """
 
-    def __init__(self, logger: RunLogger, *, headless: bool = True, fit_window: bool = False) -> None:
+    def __init__(self, logger: RunLogger, *, headless: bool = True, fit_window: bool = False,
+                 trace: bool = False) -> None:
         """fit_window: the page is the window, whatever its size (a visible replay a person
-        watches); otherwise one fixed size and scale, which discovery's screenshots need."""
+        watches); otherwise one fixed size and scale, which discovery's screenshots need.
+        trace: record a Playwright trace to this run's own evidence folder (off by default -
+        real cost per session, so callers opt in; a test suite generally shouldn't)."""
         self._logger = logger
         self._headless = headless
         self._fit_window = fit_window
+        self._trace = trace
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -155,10 +173,21 @@ class BrowserSession:
         # Dialogs that opened while a person had control, possibly still open.
         self._left_open: list[Dialog] = []
         self._dialogs_for_person = 0
+        # Set once tracing.start() succeeds; type_text pauses/resumes chunks through this.
+        # Playwright doesn't export a public type for its tracing object (playwright.async_api
+        # leaves Tracing out of __all__), so this is left as Any rather than reaching into a
+        # private module for a type hint.
+        self._tracing: Any = None
 
     @property
     def person_in_control(self) -> bool:
         return self._person_in_control
+
+    @property
+    def tracing(self) -> Any:
+        """This session's context.tracing object, when it traces itself; None otherwise.
+        type_text pauses it around a secret's real keystroke."""
+        return self._tracing
 
     @property
     def dialogs_for_person(self) -> int:
@@ -213,6 +242,10 @@ class BrowserSession:
                     viewport={"width": settings.discovery_viewport_width, "height": settings.discovery_viewport_height},
                     device_scale_factor=settings.discovery_device_scale_factor,
                 )
+            if self._trace:
+                await context.tracing.start(screenshots=True, snapshots=True)
+                await context.tracing.start_chunk()
+                self._tracing = context.tracing
             self.page = await context.new_page()
         except BaseException:
             await self._close()
@@ -230,6 +263,15 @@ class BrowserSession:
         await self.page.goto(url, timeout=timeout_ms)
 
     async def _close(self) -> None:
+        if self._tracing is not None:
+            # The chunk still open when the run ends: everything since the last secret's
+            # keystroke (or the whole run, if none was typed). Best-effort: a tracing
+            # failure here must never hide the run's real outcome.
+            try:
+                await self._tracing.stop_chunk(path=self._logger.run_dir / "trace.zip")
+                await self._tracing.stop()
+            except PlaywrightError:
+                pass
         if self._browser is not None:
             await self._browser.close()
         if self._playwright is not None:

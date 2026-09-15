@@ -85,13 +85,15 @@ class ReplayRequest:
 
 
 async def replay(request: ReplayRequest, logger: RunLogger, *, headless: bool = True,
-                 operator: Optional[OperatorSetup] = None) -> ExecutionResult:
+                 operator: Optional[OperatorSetup] = None, trace: bool = False) -> ExecutionResult:
     """Run the capability's latest trusted artifact with these inputs; one result, never an exception.
 
     With an operator, a step that needs a person hands them the run's window; without one,
-    the run ends HUMAN_ESCALATED there.
+    the run ends HUMAN_ESCALATED there. trace records a Playwright trace to this run's own
+    evidence folder, paused around the password's keystroke (off by default: real cost per
+    run, so callers opt in).
     """
-    return await _Replay(request, logger, headless, operator).execute()
+    return await _Replay(request, logger, headless, operator, trace).execute()
 
 
 class _Stop(Exception):
@@ -141,11 +143,13 @@ class _StepRecord:
 
 class _Replay:
     def __init__(self, request: ReplayRequest, logger: RunLogger, headless: bool,
-                 operator: Optional[OperatorSetup]) -> None:
+                 operator: Optional[OperatorSetup], trace: bool = False) -> None:
         self._request = request
         self._logger = logger
         self._headless = headless
         self._operator = operator
+        # Not self._trace: _Replay already has a _trace() method (the step-trace recorder).
+        self._trace_enabled = trace
         self._handoff: Optional[HandoffManager] = None
         self._handoffs: list[HandoffTelemetry] = []
         # Time spent with a person, which doesn't count against the run's own limit.
@@ -177,7 +181,8 @@ class _Replay:
             return self._end(ExecutionStatus.HARD_ABORT, error=refused)
         try:
             # A visible run is watched by a person, so its page follows their window.
-            async with BrowserSession(self._logger, headless=self._headless, fit_window=not self._headless) as session:
+            async with BrowserSession(self._logger, headless=self._headless, fit_window=not self._headless,
+                                      trace=self._trace_enabled) as session:
                 self._session = session
                 if self._operator is not None:
                     self._handoff = HandoffManager(
@@ -384,7 +389,8 @@ class _Replay:
                 if refusal is not None:
                     raise _Stop(await self._failure(record, ExecutionStatus.HARD_ABORT, "TYPING_REFUSED",
                                                     CheckFailed("a value this field may take", refusal)))
-                await type_text(handle, step.input_value or "", self._typing, timeout_ms=timeout_ms)
+                await type_text(handle, step.input_value or "", self._typing, timeout_ms=timeout_ms,
+                                tracing=self._session.tracing)
             elif step.action == ActionType.SELECT:
                 await select_option(handle, step.input_value or "", self._typing, timeout_ms=timeout_ms)
             else:
@@ -661,7 +667,9 @@ class _Replay:
             integrity_verified=self._artifact is not None,
             step_traces=list(self._traces),
             handoff_events=handoff if handoff is not None else list(self._handoffs),
-            evidence_paths=EvidencePaths(log_file=str(self._logger.log_path), screenshots_dir=str(self._screenshots)),
+            evidence_paths=EvidencePaths(
+                log_file=str(self._logger.log_path), screenshots_dir=str(self._screenshots),
+                playwright_trace_zip=self._expected_trace_path()),
             terminal_outputs=dict(self._outputs) or None,
             outcome=outcome,
             failure=failure,
@@ -675,6 +683,17 @@ class _Replay:
     @property
     def _page(self) -> Page:
         return self._session.page
+
+    def _expected_trace_path(self) -> Optional[str]:
+        """Where this run's trace will be once BrowserSession._close() saves it - called
+        while still inside the `async with BrowserSession(...)` block, before it has, so
+        the path is predicted rather than checked. `async with`'s __aexit__ always runs
+        before this coroutine's result reaches its caller, so the file is there by the
+        time anyone can look. None when tracing was never asked for, or no session ever
+        opened (an early HARD_ABORT before the browser starts)."""
+        if not self._trace_enabled or self._session is None:
+            return None
+        return str(self._logger.run_dir / "trace.zip")
 
     def _irreversible_state(self) -> Optional[str]:
         """Whether the irreversible step happened: not reached, completed (clicked and what it

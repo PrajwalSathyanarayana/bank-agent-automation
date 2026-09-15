@@ -178,6 +178,7 @@ async def discover(
     max_steps: Optional[int] = None,
     sandbox: Optional[bool] = None,
     operator: Optional[OperatorSetup] = None,
+    trace: bool = False,
 ) -> ExecutionResult:
     """Run one discovery and return its result.
 
@@ -189,11 +190,13 @@ async def discover(
     whose start address isn't on this machine is refused before the browser opens.
     operator says a person is available: when the agent is stuck, and outside a sandbox
     at the irreversible step, the run hands them its window; what they do is recorded
-    as the next steps, and after they hand back the agent carries on.
+    as the next steps, and after they hand back the agent carries on. trace records a
+    Playwright trace to this run's own evidence folder, paused around the password's
+    keystroke (off by default: real cost per run, so callers opt in).
     """
     if sandbox is None:
         sandbox = env.target_environment == "sandbox"
-    return await _Discovery(request, model, logger, headless, max_steps, sandbox, operator).execute()
+    return await _Discovery(request, model, logger, headless, max_steps, sandbox, operator, trace).execute()
 
 
 @dataclass(frozen=True)
@@ -215,7 +218,8 @@ class _ModelUnavailable(Exception):
 
 class _Discovery:
     def __init__(self, request: DiscoveryRequest, model: Model, logger: RunLogger, headless: bool,
-                 max_steps: Optional[int], sandbox: bool, operator: Optional[OperatorSetup]) -> None:
+                 max_steps: Optional[int], sandbox: bool, operator: Optional[OperatorSetup],
+                 trace: bool = False) -> None:
         contract = request.contract
         self._contract = contract
         self._model = model
@@ -223,6 +227,7 @@ class _Discovery:
         self._headless = headless
         self._sandbox = sandbox
         self._operator = operator
+        self._trace_enabled = trace
         self._handoff: Optional[HandoffManager] = None
         self._person: Optional[PersonStepRecorder] = None
         self._handoffs: list[HandoffTelemetry] = []
@@ -298,7 +303,7 @@ class _Discovery:
         if refused := signing_refusal():
             return self._end(ExecutionStatus.HARD_ABORT, *refused)
         try:
-            async with BrowserSession(self._logger, headless=self._headless) as session:
+            async with BrowserSession(self._logger, headless=self._headless, trace=self._trace_enabled) as session:
                 self._session = session
                 try:
                     check_route(self._contract.target_url, self._contract.allowed_paths)
@@ -558,7 +563,8 @@ class _Discovery:
             await click(element.handle, timeout_ms=timeout_ms)
             await self._page.wait_for_load_state("load", timeout=timeout_ms)
         elif kind == ActionType.TYPE:
-            await type_text(element.handle, value or "", self._values, timeout_ms=timeout_ms)
+            await type_text(element.handle, value or "", self._values, timeout_ms=timeout_ms,
+                            tracing=self._session.tracing)
         else:
             await select_option(element.handle, value or "", self._values, timeout_ms=timeout_ms)
 
@@ -676,12 +682,25 @@ class _Discovery:
             end_time=datetime.now(timezone.utc),
             duration_ms=duration_ms,
             handoff_events=[*self._handoffs, *([handoff] if handoff else [])],
-            evidence_paths=EvidencePaths(log_file=str(self._logger.log_path), screenshots_dir=str(self._screenshots)),
+            evidence_paths=EvidencePaths(
+                log_file=str(self._logger.log_path), screenshots_dir=str(self._screenshots),
+                playwright_trace_zip=self._expected_trace_path()),
             terminal_outputs=outputs,
             error=error,
         )
         self._logger.write_result(result.to_json())
         return result
+
+    def _expected_trace_path(self) -> Optional[str]:
+        """Where this run's trace will be once BrowserSession._close() saves it - called
+        while still inside the `async with BrowserSession(...)` block, before it has, so
+        the path is predicted rather than checked. `async with`'s __aexit__ always runs
+        before this coroutine's result reaches its caller, so the file is there by the
+        time anyone can look. None when tracing was never asked for, or no session ever
+        opened (an early HARD_ABORT before the browser starts)."""
+        if not self._trace_enabled or self._session is None:
+            return None
+        return str(self._logger.run_dir / "trace.zip")
 
     def _unread_outputs(self) -> list[str]:
         return [output.key for output in self._contract.output_definitions if output.key not in self._outputs]

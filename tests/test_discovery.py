@@ -2465,6 +2465,49 @@ async def test_a_failed_keystroke_never_carries_the_value(page):
     assert (failure.value.__cause__, failure.value.__context__) == (None, None)
 
 
+class _FakeTracing:
+    """Records call order only; type_text needs nothing more from a Tracing object."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def stop_chunk(self, *, path=None) -> None:
+        self.calls.append("stop")
+
+    async def start_chunk(self, *, title=None, name=None) -> None:
+        self.calls.append("start")
+
+
+@pytest.mark.anyio
+async def test_typing_a_secret_pauses_and_resumes_the_trace_around_the_keystroke(page):
+    await page.set_content('<input id="p" type="password">')
+    tracing = _FakeTracing()
+    await type_text(await page.query_selector("#p"), "{credential:bank_password}", BROWSER_VALUES,
+                    timeout_ms=5_000, tracing=tracing)
+    assert tracing.calls == ["stop", "start"]
+    assert await page.input_value("#p") == FAKE_PASSWORD
+
+
+@pytest.mark.anyio
+async def test_typing_a_non_secret_never_touches_the_trace(page):
+    await page.set_content('<input id="m" type="text">')
+    tracing = _FakeTracing()
+    await type_text(await page.query_selector("#m"), "{member_id}", BROWSER_VALUES, timeout_ms=5_000,
+                    tracing=tracing)
+    assert tracing.calls == []
+
+
+@pytest.mark.anyio
+async def test_the_trace_resumes_even_when_the_keystroke_fails(page):
+    await page.set_content('<input id="p" type="password">')
+    box = await page.query_selector("#p")
+    await page.evaluate("document.getElementById('p').remove()")
+    tracing = _FakeTracing()
+    with pytest.raises(ActionFailed):
+        await type_text(box, "{credential:bank_password}", BROWSER_VALUES, timeout_ms=1_000, tracing=tracing)
+    assert tracing.calls == ["stop", "start"]
+
+
 @pytest.mark.anyio
 async def test_an_option_is_chosen_by_its_label_with_the_input_filled(page):
     await page.set_content(f"{QUIRKS_DOCTYPE}<html><body>{PAYEE_SELECT}</body></html>")
@@ -2555,6 +2598,24 @@ async def test_a_dialog_the_person_already_answered_is_left_as_they_answered_it(
         assert await session.take_back_dialogs() == []
         await session.page.wait_for_function("document.title === 'true'", timeout=5_000)
         assert "DIALOG_DISMISSED" not in [line["event_type"] for line in _log_lines(run_logger)]
+
+
+@pytest.mark.anyio
+async def test_a_traced_session_saves_a_trace_zip_to_its_own_run_folder(mock_bank_url, run_logger):
+    import zipfile
+    async with BrowserSession(run_logger, trace=True) as session:
+        assert session.tracing is not None
+        await session.open(f"{mock_bank_url}/login", timeout_ms=10_000)
+    assert run_logger.trace_path is not None
+    assert run_logger.trace_path.stat().st_size > 0
+    assert zipfile.is_zipfile(run_logger.trace_path)
+
+
+@pytest.mark.anyio
+async def test_a_session_that_doesnt_trace_has_nothing_to_save(mock_bank_url, run_logger):
+    async with BrowserSession(run_logger) as session:
+        assert session.tracing is None
+    assert run_logger.trace_path is None
 
 
 @pytest.mark.anyio
@@ -2910,6 +2971,14 @@ async def test_discovery_records_the_flow_and_stops_before_the_irreversible_step
     result_path = run_logger.run_dir / "result.json"
     assert result_path.exists() and result_path.read_text(encoding="utf-8") == result.to_json()
     assert run_logger.log_path.parent == run_logger.run_dir
+
+
+@pytest.mark.anyio
+async def test_a_traced_discovery_saves_its_trace_and_names_it_in_the_result(discovery, dashboard_popup, run_logger):
+    dashboard_popup(False)
+    result, _ = await discovery(*TO_CONFIRM_PAGE, CONFIRM, trace=True)
+    assert result.evidence_paths.playwright_trace_zip == str(run_logger.trace_path)
+    assert run_logger.trace_path.exists()
 
 
 @pytest.mark.anyio

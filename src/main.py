@@ -79,7 +79,7 @@ async def _run(args: argparse.Namespace) -> int:
         async with AsyncExitStack() as stack:
             operator = await _operator(stack, args.operator)
             handled = await handle(args.request, intake_model=ClaudeIntakeModel(), discovery_model=ClaudeModel(),
-                                   headless=not (args.headed or args.operator), operator=operator)
+                                   headless=not (args.headed or args.operator), operator=operator, trace=True)
     except IntakeUnavailable as unavailable:
         print(f"The request couldn't be read right now ({unavailable}); nothing was run. Please try again.")
         return 2
@@ -112,7 +112,7 @@ async def _discover(args: argparse.Namespace) -> int:
         operator = await _operator(stack, args.operator)
         # A person can only take over a window they can see.
         result = await discover(request, ClaudeModel(), logger, headless=not (args.headed or args.operator),
-                                max_steps=args.max_steps, operator=operator)
+                                max_steps=args.max_steps, operator=operator, trace=True)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.HUMAN_ESCALATED) else 1
@@ -127,7 +127,8 @@ async def _replay(args: argparse.Namespace) -> int:
     async with AsyncExitStack() as stack:
         operator = await _operator(stack, args.operator)
         # A person can only take over a window they can see.
-        result = await replay(request, logger, headless=not (args.headed or args.operator), operator=operator)
+        result = await replay(request, logger, headless=not (args.headed or args.operator), operator=operator,
+                             trace=True)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
     return _exit_code(result)

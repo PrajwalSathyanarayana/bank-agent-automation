@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
@@ -59,6 +60,14 @@ class RunLogger:
             handler = logging.FileHandler(self.log_path, mode="a", encoding="utf-8")
             handler.setFormatter(jsonlogger.JsonFormatter())
             self._logger.addHandler(handler)
+
+    @property
+    def trace_path(self) -> Optional[Path]:
+        """This run's Playwright trace (src/surface/browser.py, BrowserSession(trace=True)),
+        if one was recorded. None when tracing was off, or nothing was ever saved (e.g. the
+        run stopped before a browser opened)."""
+        path = self.run_dir / "trace.zip"
+        return path if path.is_file() else None
 
     def _emit(self, event_type: str, fields: dict) -> None:
         """Single chokepoint every tap point funnels through — redaction

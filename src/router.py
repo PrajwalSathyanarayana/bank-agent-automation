@@ -36,6 +36,7 @@ async def handle(
     contracts: Mapping[str, ArtifactContract] = CONTRACTS,
     headless: bool = True,
     operator: Optional[OperatorSetup] = None,
+    trace: bool = False,
 ) -> Handled:
     """Interpret the request and, if it's understood, run its task the way it can be run now."""
     answer = await interpret(request, contracts, intake_model)
@@ -45,8 +46,9 @@ async def handle(
     if latest_saved(capability) is None:
         logger = RunLogger("DISCOVERY", capability=capability)
         result = await discover(DiscoveryRequest(contracts[capability], answer.inputs), discovery_model, logger,
-                                headless=headless, operator=operator)
+                                headless=headless, operator=operator, trace=trace)
     else:
         logger = RunLogger("REPLAY", capability=capability)
-        result = await replay(ReplayRequest(capability, answer.inputs), logger, headless=headless, operator=operator)
+        result = await replay(ReplayRequest(capability, answer.inputs), logger, headless=headless, operator=operator,
+                              trace=trace)
     return Handled(answer, result)

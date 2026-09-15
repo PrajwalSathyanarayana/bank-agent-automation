@@ -501,6 +501,17 @@ async def test_a_replay_pays_the_bill_and_returns_both_balances(saved_bill_pay, 
 
 
 @pytest.mark.anyio
+async def test_a_traced_replay_saves_its_trace_and_names_it_in_the_result(saved_bill_pay, dashboard_popup,
+                                                                          replay_logger):
+    dashboard_popup(False)
+    saved_bill_pay()
+    result = await replay(ReplayRequest(BILL_PAY, _asked()), replay_logger, trace=True)
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    assert result.evidence_paths.playwright_trace_zip == str(replay_logger.trace_path)
+    assert replay_logger.trace_path.exists()
+
+
+@pytest.mark.anyio
 async def test_the_same_artifact_pays_for_another_member_payee_and_amount(saved_bill_pay, dashboard_popup,
                                                                         replay_logger):
     dashboard_popup(False)
@@ -955,7 +966,8 @@ async def test_only_a_visible_replay_fits_its_page_to_the_window(saved_bill_pay,
     monkeypatch.setattr("src.replay.executor.BrowserSession", no_browser)
     for headless in (False, True):
         await replay(ReplayRequest(BILL_PAY, _asked()), replay_logger, headless=headless)
-    assert opened == [{"headless": False, "fit_window": True}, {"headless": True, "fit_window": False}]
+    assert opened == [{"headless": False, "fit_window": True, "trace": False},
+                      {"headless": True, "fit_window": False, "trace": False}]
 
 
 @pytest.mark.anyio

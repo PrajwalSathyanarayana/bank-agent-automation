@@ -45,6 +45,13 @@ def test_write_result_saves_result_json_beside_the_runs_own_log(tmp_path, monkey
     assert logger.screenshots_dir == logger.run_dir / "screenshots"
 
 
+def test_trace_path_is_none_until_a_trace_is_actually_saved_there(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    assert logger.trace_path is None
+    (logger.run_dir / "trace.zip").write_bytes(b"PK\x03\x04")
+    assert logger.trace_path == logger.run_dir / "trace.zip"
+
+
 def test_each_call_appends_one_line(tmp_path, monkeypatch):
     logger = _make_logger(tmp_path, monkeypatch)
     logger.execution_started(goal="test goal")

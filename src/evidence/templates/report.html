@@ -160,7 +160,8 @@
 
   <footer>
     Raw evidence in this same folder: <a href="result.json">result.json</a> ·
-    <a href="log.json">log.json</a>
+    <a href="log.json">log.json</a>{% if result.evidence_paths.playwright_trace_zip %} ·
+    <a href="trace.zip">trace.zip</a> (open with <code>playwright show-trace trace.zip</code>){% endif %}
   </footer>
 </main>
 </body>
