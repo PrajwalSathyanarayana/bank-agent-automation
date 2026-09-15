@@ -639,6 +639,40 @@ def _no_browser(*args, **kwargs):
     raise AssertionError("no browser should open")
 
 
+# --- repeatability: the same request, the same path and answer every time ---
+
+def _path_taken(result) -> list[tuple]:
+    # Each step replay ran, how it ended and which of its locators found the element.
+    return [(trace.sequence_index, trace.status, trace.locator_priority) for trace in result.step_traces]
+
+
+@pytest.mark.anyio
+async def test_the_same_request_replays_to_the_same_answer_every_time(saved_bill_pay, dashboard_popup):
+    dashboard_popup(False)
+    saved_bill_pay()
+    results = [await _replay(RunLogger("REPLAY", capability=BILL_PAY), payee="Acme Gas") for _ in range(3)]
+    answers = {(result.status, result.outcome.code, result.summary, result.irreversible_step) for result in results}
+    assert answers == {(ExecutionStatus.BUSINESS_OUTCOME, "PAYEE_NOT_FOUND", results[0].summary, "not_reached")}
+    assert all(_path_taken(result) == _path_taken(results[0]) for result in results)
+
+
+@pytest.mark.anyio
+async def test_repeated_payments_take_the_same_path_and_move_exactly_the_amount_each_time(saved_bill_pay,
+                                                                                         dashboard_popup):
+    dashboard_popup(False)
+    saved_bill_pay()
+    results = [await _replay(RunLogger("REPLAY", capability=BILL_PAY), member="40412", amount=10.0)
+               for _ in range(3)]
+    assert [result.status for result in results] == [ExecutionStatus.SUCCESS] * 3
+    assert all(_path_taken(result) == _path_taken(results[0]) for result in results)
+    balances = [(_amount(result.terminal_outputs["checking_balance_before"]),
+                 _amount(result.terminal_outputs["new_checking_balance"])) for result in results]
+    for before, after in balances:
+        assert after == before - Decimal("10.00")  # exactly the amount, never twice
+    for (_, after), (next_before, _) in zip(balances, balances[1:]):
+        assert next_before == after  # each run starts where the last one ended
+
+
 # --- a changed bank: the mock bank's test switches ---
 
 # Step 4 exactly as discovery recorded it in v3.0.0: the link's text, its address, its menu position.
