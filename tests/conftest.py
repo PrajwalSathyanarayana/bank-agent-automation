@@ -8,7 +8,7 @@ from playwright.async_api import async_playwright
 from werkzeug.serving import make_server
 
 from src.config.settings import settings
-from src.discovery.browser import launch_args
+from src.surface.browser import launch_args
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mock_bank"))
 from app import create_app  # noqa: E402

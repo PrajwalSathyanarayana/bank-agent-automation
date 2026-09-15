@@ -8,7 +8,7 @@ import base64
 from collections.abc import Sequence
 from typing import Any, Mapping
 
-from src.discovery.browser import number_text
+from src.surface.browser import number_text
 from src.types.artifact_schema import (
     CredentialDefinition,
     CredentialKind,

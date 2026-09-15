@@ -18,7 +18,7 @@ from src.config.env import configured_credentials, env
 from src.config.settings import settings
 from src.discovery.artifact_builder import ArtifactContract, build_and_save
 from src.discovery.backstop import ScanInputs
-from src.discovery.browser import (
+from src.surface.browser import (
     ActionFailed,
     BrowserSession,
     action_timeout_ms,

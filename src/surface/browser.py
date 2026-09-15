@@ -1,5 +1,6 @@
-"""The discovery browser: one Chromium page the size of the model's view, and the only
-functions that act on it.
+"""The browser surface both modes act through: one Chromium page the size of the model's
+view, and the only functions that act on it. Discovery and replay share it, so they can
+never disagree on how a dialog is answered or a secret is typed.
 
 A secret becomes its real value inside type_text, as the last step before the keystroke,
 and nowhere else: never in a log line, a retry record, an error or the reply to the

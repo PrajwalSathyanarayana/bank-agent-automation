@@ -16,7 +16,7 @@ from pydantic import SecretStr
 
 from src.config.env import configured_credentials, env
 from src.config.settings import settings
-from src.discovery.browser import (
+from src.surface.browser import (
     ActionFailed,
     BrowserSession,
     action_timeout_ms,
