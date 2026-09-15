@@ -20,7 +20,7 @@ _SHOWN_TEXT = """(element) => {
   return { visible: visible, text: isButton ? (element.value || "") : (element.innerText || "") };
 }"""
 
-_WORDING = """(element) => {
+ELEMENT_WORDING_JS = """(element) => {
   const words = [element.textContent || ""];
   // A button input's value is its label. Other inputs' values are typed data, and a
   // password's value is never read.
@@ -52,7 +52,7 @@ async def element_wording(element: ElementHandle) -> list[str]:
     value, and its aria-label, title and alt. Read from the live element, so the tier
     doesn't depend on which locators survived or how the model described the step.
     """
-    return await element.evaluate(_WORDING)
+    return await element.evaluate(ELEMENT_WORDING_JS)
 
 
 def phrase_pattern(phrase: str) -> Optional[re.Pattern[str]]:

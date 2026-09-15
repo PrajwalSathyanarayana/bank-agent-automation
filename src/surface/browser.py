@@ -4,7 +4,8 @@ never disagree on how a dialog is answered or a secret is typed.
 
 A secret becomes its real value inside type_text, as the last step before the keystroke,
 and nowhere else: never in a log line, a retry record, an error or the reply to the
-model. Every action has a time cap, and a dialog nobody expected is dismissed.
+model. Every action has a time cap, and a dialog nobody expected is dismissed — except
+while a person has control of the session, when every dialog is left for them to answer.
 """
 from collections.abc import Awaitable, Callable, Mapping
 from decimal import Decimal
@@ -64,7 +65,11 @@ def placeholder_values(
 
 
 def dismiss_dialogs(
-    page: Page, logger: Optional[RunLogger] = None, *, accept_now: Callable[[], bool] = lambda: False
+    page: Page,
+    logger: Optional[RunLogger] = None,
+    *,
+    accept_now: Callable[[], bool] = lambda: False,
+    hold: Callable[[Dialog], bool] = lambda dialog: False,
 ) -> list[str]:
     """Answer every dialog the page opens, and note each one's type and wording.
 
@@ -72,10 +77,18 @@ def dismiss_dialogs(
     accept_now() says the system is performing an action expected to ask (an
     irreversible step in a test environment). Returns the list the notes go into, for
     the loop to tell the model.
+
+    hold(dialog) returns True when it takes the dialog instead: a person has control and
+    answers it on screen themselves. A held dialog is logged but not noted, since the
+    model didn't cause it; whoever holds it dismisses it if it is still open later.
     """
     notes: list[str] = []
 
     async def on_dialog(dialog: Dialog) -> None:
+        if hold(dialog):
+            if logger is not None:
+                logger.dialog_left_for_person(dialog.type, dialog.message)
+            return
         # Answered first: an error while noting it must never leave the page blocked,
         # since an open dialog stalls the page until someone answers it.
         accepted = accept_now()
@@ -119,7 +132,8 @@ async def select_option(
 
 
 class BrowserSession:
-    """Chromium with one page the size of the model's view; dialogs are dismissed.
+    """Chromium with one page the size of the model's view; dialogs are dismissed, or left
+    for a person while one has control.
 
     Use as `async with BrowserSession(logger) as session:`. Everything is closed on the
     way out, after an error too.
@@ -134,6 +148,43 @@ class BrowserSession:
         self.dialogs: list[str] = []
         # Set only while the system performs an action expected to open a dialog.
         self.accepting_dialogs = False
+        self._person_in_control = False
+        # Dialogs that opened while a person had control, possibly still open.
+        self._left_open: list[Dialog] = []
+
+    @property
+    def person_in_control(self) -> bool:
+        return self._person_in_control
+
+    def leave_dialogs_to_person(self) -> None:
+        """A person has control: from now on every dialog is left open for them to answer."""
+        self._person_in_control = True
+
+    async def take_back_dialogs(self) -> list[str]:
+        """Control is back with the system: dialogs are answered by code again, and any the
+        person left open is dismissed. Returns those, as "type: wording".
+
+        Answering by code resumes first, so a dialog opening meanwhile is handled as usual.
+        One the person already answered can't be dismissed again ("No dialog is showing"):
+        their answer stands and it is skipped.
+        """
+        self._person_in_control = False
+        left, self._left_open = self._left_open, []
+        dismissed: list[str] = []
+        for dialog in left:
+            try:
+                await dialog.dismiss()
+            except PlaywrightError:
+                continue
+            dismissed.append(f"{dialog.type}: {dialog.message}")
+            self._logger.dialog_dismissed(dialog.type, dialog.message)
+        return dismissed
+
+    def _hold(self, dialog: Dialog) -> bool:
+        if not self._person_in_control:
+            return False
+        self._left_open.append(dialog)
+        return True
 
     async def __aenter__(self) -> "BrowserSession":
         self._playwright = await async_playwright().start()
@@ -149,7 +200,8 @@ class BrowserSession:
         except BaseException:
             await self._close()
             raise
-        self.dialogs = dismiss_dialogs(self.page, self._logger, accept_now=lambda: self.accepting_dialogs)
+        self.dialogs = dismiss_dialogs(self.page, self._logger, accept_now=lambda: self.accepting_dialogs,
+                                       hold=self._hold)
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:

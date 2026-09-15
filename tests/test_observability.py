@@ -185,6 +185,60 @@ def test_recovery_event_handles_optional_fields(tmp_path, monkeypatch):
     assert lines[0]["dom_snapshot"] is None
 
 
+# --- a person in control of the run ---
+
+def test_handoff_requested_carries_the_context_a_person_needs(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch, mode="REPLAY")
+    logger.handoff_requested("OVER_AUTO_LIMIT", "the amount is above the bank's limit for automatic payments",
+                             ["I finished it", "Stop the task"], step_index=14,
+                             step_description="Confirm the payment", screenshot_path="shots/pause.png")
+    line = _read_lines(logger.log_path)[0]
+    assert line["event_type"] == "HANDOFF_REQUESTED"
+    assert (line["trigger_reason"], line["step_index"], line["step_description"], line["screenshot_path"]) == (
+        "OVER_AUTO_LIMIT", 14, "Confirm the payment", "shots/pause.png")
+    assert line["why"] == "the amount is above the bank's limit for automatic payments"
+    assert line["buttons"] == ["I finished it", "Stop the task"]
+
+
+def test_handoff_resolved_counts_what_the_person_did(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch, mode="REPLAY")
+    logger.handoff_resolved("MANUAL_COMPLETED", 41_000, person_actions=3, screenshot_path="shots/back.png")
+    line = _read_lines(logger.log_path)[0]
+    assert (line["event_type"], line["resolution"], line["duration_ms"]) == ("HANDOFF_RESOLVED", "MANUAL_COMPLETED", 41_000)
+    assert (line["person_actions"], line["screenshot_path"]) == (3, "shots/back.png")
+
+
+@pytest.mark.parametrize(
+    "kind, what, element_kind",
+    [("click", "Confirm Payment", "button"), ("field_changed", "Amount:", "text box"), ("page_visited", None, None)],
+)
+def test_each_person_action_is_one_line(tmp_path, monkeypatch, kind, what, element_kind):
+    logger = _make_logger(tmp_path, monkeypatch, mode="REPLAY")
+    logger.person_action(kind, "/billpay/confirm", what=what, element_kind=element_kind)
+    line = _read_lines(logger.log_path)[0]
+    assert line["event_type"] == "PERSON_ACTION"
+    assert (line["kind"], line["page_path"], line["what"], line["element_kind"]) == (
+        kind, "/billpay/confirm", what, element_kind)
+
+
+def test_a_person_action_still_scrubs_a_secret_that_slips_into_it(tmp_path, monkeypatch):
+    # A button's wording is page text, never typed text; the chokepoint still catches a secret.
+    logger = _make_logger(tmp_path, monkeypatch, mode="REPLAY")
+    password = env.mock_bank_password.get_secret_value()
+    logger.person_action("click", "/login", what=f"Sign on as {password}", element_kind="button")
+    raw = logger.log_path.read_text(encoding="utf-8")
+    assert password not in raw
+    assert "[REDACTED]" in raw
+
+
+def test_a_dialog_left_for_the_person_is_noted_with_its_wording(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch, mode="REPLAY")
+    logger.dialog_left_for_person("confirm", "This action cannot be undone. Continue?")
+    line = _read_lines(logger.log_path)[0]
+    assert (line["event_type"], line["dialog_type"], line["dialog_message"]) == (
+        "DIALOG_LEFT_FOR_PERSON", "confirm", "This action cannot be undone. Continue?")
+
+
 # --- the plain-English summary on every result ---
 
 BILL_PAY = "member_servicing_and_bill_pay"

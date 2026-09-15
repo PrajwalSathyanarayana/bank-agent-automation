@@ -72,9 +72,14 @@ class HandoffTelemetry(BaseModel):
     resolved_timestamp: Optional[datetime] = None
     duration_ms: Optional[int] = Field(default=None, ge=0)
     trigger_reason: str = Field(min_length=1)
+    # The step the run paused at; None when it paused before any step.
+    step_index: Optional[int] = Field(default=None, ge=0)
     operator_id: Optional[str] = None
     resolution: Optional[HandoffResolution] = None
     session_lock_token: Optional[str] = None
+    # How many actions the person took (clicks, fields changed, pages visited); each is a
+    # line in the run log. None when no person took control.
+    person_actions: Optional[int] = Field(default=None, ge=0)
 
 
 class ErrorDetail(BaseModel):

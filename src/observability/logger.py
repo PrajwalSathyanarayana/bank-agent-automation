@@ -119,14 +119,51 @@ class RunLogger:
              "details": details},
         )
 
+    def handoff_requested(
+        self,
+        trigger_reason: str,
+        why: str,
+        buttons: list[str],
+        *,
+        step_index: Optional[int] = None,
+        step_description: Optional[str] = None,
+        screenshot_path: Optional[str] = None,
+    ) -> None:
+        """The run paused for a person: the stop code, why in plain words, the step it paused
+        at, the screenshot taken at the pause, and the buttons the person is offered."""
+        self._emit(
+            "HANDOFF_REQUESTED",
+            {"trigger_reason": trigger_reason, "why": why, "buttons": buttons, "step_index": step_index,
+             "step_description": step_description, "screenshot_path": screenshot_path},
+        )
+
     def handoff_started(self, trigger_reason: str, session_lock_token: str) -> None:
         self._emit(
             "HANDOFF_STARTED",
             {"trigger_reason": trigger_reason, "session_lock_token": session_lock_token},
         )
 
-    def handoff_resolved(self, resolution: str, duration_ms: int) -> None:
-        self._emit("HANDOFF_RESOLVED", {"resolution": resolution, "duration_ms": duration_ms})
+    def handoff_resolved(
+        self, resolution: str, duration_ms: int, *,
+        person_actions: Optional[int] = None, screenshot_path: Optional[str] = None,
+    ) -> None:
+        """Control came back: how (resumed, finished by the person, stopped, timed out), how
+        long the person had it, how many actions they took, and the screenshot at hand-back."""
+        self._emit("HANDOFF_RESOLVED", {"resolution": resolution, "duration_ms": duration_ms,
+                                        "person_actions": person_actions, "screenshot_path": screenshot_path})
+
+    def person_action(
+        self, kind: str, page_path: str, *, what: Optional[str] = None, element_kind: Optional[str] = None
+    ) -> None:
+        """One thing the person did while in control. kind is "click" (what = the element's
+        own wording), "field_changed" (what = the field's label, never its value),
+        "page_visited" or "tab_opened" (the path alone). Nothing typed is ever passed here."""
+        self._emit("PERSON_ACTION", {"kind": kind, "page_path": page_path, "what": what,
+                                     "element_kind": element_kind})
+
+    def dialog_left_for_person(self, dialog_type: str, message: str) -> None:
+        """A dialog opened while a person had control and was left for them to answer."""
+        self._emit("DIALOG_LEFT_FOR_PERSON", {"dialog_type": dialog_type, "dialog_message": message})
 
     def artifact_saved(self, artifact_id: str, version: str, sha256_hash: str) -> None:
         self._emit(

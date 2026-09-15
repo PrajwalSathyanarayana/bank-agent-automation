@@ -463,6 +463,21 @@ def test_a_result_is_printed_without_empty_fields():
     assert printed["integrity_verified"] is False  # false is a value, not an empty field
 
 
+def test_a_handoff_record_counts_the_persons_actions_only_when_a_person_took_control():
+    nobody = HandoffTelemetry(triggered_timestamp=datetime.now(timezone.utc), trigger_reason="OVER_AUTO_LIMIT")
+    took_over = nobody.model_copy(update={"step_index": 14, "person_actions": 0})
+    printed = [json.loads(_result_with(ExecutionStatus.HUMAN_ESCALATED, handoff_events=[record]).to_json())
+               ["handoff_events"][0] for record in (nobody, took_over)]
+    assert "person_actions" not in printed[0] and "step_index" not in printed[0]
+    # A person who took control and did nothing is a fact worth showing: 0 is kept.
+    assert (printed[1]["person_actions"], printed[1]["step_index"]) == (0, 14)
+
+
+def test_a_handoff_record_refuses_a_negative_count():
+    with pytest.raises(ValidationError):
+        HandoffTelemetry(triggered_timestamp=datetime.now(timezone.utc), trigger_reason="STUCK", person_actions=-1)
+
+
 def test_a_recovery_names_the_interruption_it_cleared():
     log = RecoveryAttemptLog(timestamp=datetime.now(timezone.utc), tier=RecoveryTier.TIER_1_RULE,
                              interruption_code="PROMO_POPUP", resolved=True)

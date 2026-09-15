@@ -2469,6 +2469,69 @@ async def test_a_dialog_is_accepted_only_while_the_system_expects_one(page, run_
     assert [line["event_type"] for line in _log_lines(run_logger)] == ["DIALOG_DISMISSED", "DIALOG_ACCEPTED"]
 
 
+PAY_BUTTON = "<button onclick=\"document.title = String(confirm('Pay now?'))\">Pay</button>"
+
+
+async def _press_pay_later(page):
+    # Clicked from a timer: an evaluate that opened the dialog itself would wait on it.
+    await page.evaluate("setTimeout(() => document.querySelector('button').click(), 50)")
+
+
+async def _until(condition, timeout_s=5.0):
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "timed out waiting"
+        await asyncio.sleep(0.05)
+
+
+@pytest.mark.anyio
+async def test_a_dialog_is_left_open_while_a_person_has_control(page, run_logger):
+    held = []
+    notes = dismiss_dialogs(page, run_logger, hold=lambda dialog: held.append(dialog) or True)
+    await page.set_content(PAY_BUTTON)
+    await _press_pay_later(page)
+    await _until(lambda: held)
+    # Left for the person: not answered, not told to the model, noted in the log.
+    assert notes == []
+    assert [(line["event_type"], line["dialog_message"]) for line in _log_lines(run_logger)] == [
+        ("DIALOG_LEFT_FOR_PERSON", "Pay now?")]
+    await held[0].accept()  # the person presses OK
+    await page.wait_for_function("document.title === 'true'", timeout=5_000)
+
+
+@pytest.mark.anyio
+async def test_taking_back_control_dismisses_what_the_person_left_open(mock_bank_url, run_logger):
+    async with BrowserSession(run_logger) as session:
+        await session.page.set_content(PAY_BUTTON)
+        session.leave_dialogs_to_person()
+        await _press_pay_later(session.page)
+        await _until(lambda: [line for line in _log_lines(run_logger) if line["event_type"] == "DIALOG_LEFT_FOR_PERSON"])
+        assert await session.take_back_dialogs() == ["confirm: Pay now?"]
+        assert not session.person_in_control
+        await session.page.wait_for_function("document.title === 'false'", timeout=5_000)
+        # Answered by code again from here on.
+        assert await asyncio.wait_for(session.page.evaluate("confirm('Leave?')"), timeout=10) is False
+        assert [line["event_type"] for line in _log_lines(run_logger)] == [
+            "DIALOG_LEFT_FOR_PERSON", "DIALOG_DISMISSED", "DIALOG_DISMISSED"]
+        assert session.dialogs == ["confirm: Leave?"]  # only the model's own dialog is told to it
+
+
+@pytest.mark.anyio
+async def test_a_dialog_the_person_already_answered_is_left_as_they_answered_it(mock_bank_url, run_logger):
+    async with BrowserSession(run_logger) as session:
+        await session.page.set_content(PAY_BUTTON)
+        # The browser's own protocol answers it, as a person's click on OK does.
+        browser_protocol = await session.page.context.new_cdp_session(session.page)
+        await browser_protocol.send("Page.enable")
+        session.leave_dialogs_to_person()
+        await _press_pay_later(session.page)
+        await _until(lambda: [line for line in _log_lines(run_logger) if line["event_type"] == "DIALOG_LEFT_FOR_PERSON"])
+        await browser_protocol.send("Page.handleJavaScriptDialog", {"accept": True})
+        assert await session.take_back_dialogs() == []
+        await session.page.wait_for_function("document.title === 'true'", timeout=5_000)
+        assert "DIALOG_DISMISSED" not in [line["event_type"] for line in _log_lines(run_logger)]
+
+
 @pytest.mark.anyio
 async def test_the_session_opens_an_allowed_start_page_and_refuses_another(mock_bank_url, run_logger):
     async with BrowserSession(run_logger) as session:
