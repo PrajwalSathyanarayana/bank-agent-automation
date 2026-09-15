@@ -357,6 +357,25 @@ async def observe(page: Page, max_elements: Optional[int] = None) -> Observation
     )
 
 
+async def element_for(page: Page, target: ElementHandle) -> Optional[PageElement]:
+    """The element-list entry for one element a person picked, read by the same collector
+    the model's list comes from, so its facts, description and locators follow the same
+    rules. None when the collector wouldn't list it (nothing to click, type into or choose).
+    It carries no list number: the model never picks it."""
+    collected = await page.evaluate_handle(_COLLECTOR_SOURCE)
+    try:
+        index = await collected.evaluate("(result, target) => result.elements.indexOf(target)", target)
+        if index < 0:
+            return None
+        raw = await collected.evaluate("(result, index) => result.facts[index]", index)
+    finally:
+        await collected.dispose()
+    facts = _to_facts(raw)
+    viewport = page.viewport_size
+    in_viewport = facts.box.intersects(viewport["width"], viewport["height"]) if viewport else True
+    return PageElement(number=0, facts=facts, description=describe(facts), in_viewport=in_viewport, handle=target)
+
+
 @asynccontextmanager
 async def observing(page: Page, max_elements: Optional[int] = None) -> AsyncIterator[Observation]:
     """observe() for one turn: every element reference is released when the block ends,

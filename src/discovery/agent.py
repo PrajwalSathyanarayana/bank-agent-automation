@@ -18,6 +18,8 @@ from src.config.env import configured_credentials, env
 from src.config.settings import settings
 from src.discovery.artifact_builder import ArtifactContract, build_and_save
 from src.discovery.backstop import ScanInputs
+from src.discovery.person_steps import PersonStepRecorder
+from src.handoff.session_manager import Choice, HandoffManager, HandoffRequest, OperatorSetup
 from src.surface.browser import (
     ActionFailed,
     BrowserSession,
@@ -41,12 +43,13 @@ from src.discovery.prompts import (
     output_kind,
     outputs_first,
     page_blocks,
+    person_handed_back,
     progress,
     tool_definitions,
 )
 from src.discovery.recorder import Action, AssertionRefused, ExtractionRefused, Recorder, TypingRefused
 from src.observability.logger import RunLogger
-from src.observability.summary import readable_values, summarize
+from src.observability.summary import readable_values, reason_for, summarize
 from src.safety.allowlist import AllowlistViolation, check_domain, check_route, enforce_safety
 from src.safety.authorization import MISMATCH, authorize
 from src.safety.redactor import redact_text, scrub_known_values
@@ -173,6 +176,7 @@ async def discover(
     headless: bool = True,
     max_steps: Optional[int] = None,
     sandbox: Optional[bool] = None,
+    operator: Optional[OperatorSetup] = None,
 ) -> ExecutionResult:
     """Run one discovery and return its result.
 
@@ -182,10 +186,13 @@ async def discover(
     sandbox says whether the bank is a test copy, where an irreversible step is
     performed to learn what follows it; None reads TARGET_ENVIRONMENT. A sandbox run
     whose start address isn't on this machine is refused before the browser opens.
+    operator says a person is available: when the agent is stuck, and outside a sandbox
+    at the irreversible step, the run hands them its window; what they do is recorded
+    as the next steps, and after they hand back the agent carries on.
     """
     if sandbox is None:
         sandbox = env.target_environment == "sandbox"
-    return await _Discovery(request, model, logger, headless, max_steps, sandbox).execute()
+    return await _Discovery(request, model, logger, headless, max_steps, sandbox, operator).execute()
 
 
 @dataclass(frozen=True)
@@ -207,13 +214,26 @@ class _ModelUnavailable(Exception):
 
 class _Discovery:
     def __init__(self, request: DiscoveryRequest, model: Model, logger: RunLogger, headless: bool,
-                 max_steps: Optional[int], sandbox: bool) -> None:
+                 max_steps: Optional[int], sandbox: bool, operator: Optional[OperatorSetup]) -> None:
         contract = request.contract
         self._contract = contract
         self._model = model
         self._logger = logger
         self._headless = headless
         self._sandbox = sandbox
+        self._operator = operator
+        self._handoff: Optional[HandoffManager] = None
+        self._person: Optional[PersonStepRecorder] = None
+        self._handoffs: list[HandoffTelemetry] = []
+        # Actions of a person's the handoff couldn't pass on to be recorded.
+        self._unrecorded: list[str] = []
+        # Time spent with a person, which doesn't count against the run's own limit.
+        self._paused_ms = 0
+        self._people = 0
+        # A person gets one chance to unblock a stuck agent.
+        self._stuck_handed_off = False
+        # How a person took part, for the summary ("helped", "stopped", "not_saved", …).
+        self._person_end: Optional[str] = None
         self._max_steps = max_steps or settings.discovery_max_steps
         self._usage = dict.fromkeys(_USAGE_KEYS, 0)
 
@@ -284,6 +304,16 @@ class _Discovery:
                     return self._end(ExecutionStatus.HARD_ABORT, "ALLOWLIST_VIOLATION", str(violation))
                 start = self._recorder.draft_start(session.page.url)
                 await self._recorder.commit(start, session.page, self._run, derived=None)
+                if self._operator is not None:
+                    # A person's actions continue this same recording.
+                    self._person = PersonStepRecorder(
+                        self._recorder, session, self._run, self._contract.allowed_paths,
+                        username_key=self._username_key, known_interruptions=self._contract.known_interruptions,
+                        logger=self._logger)
+                    self._handoff = HandoffManager(
+                        session, self._logger, capability=self._contract.capability, goal=self._goal,
+                        screenshots_dir=self._screenshots, announcer=self._operator.announcer,
+                        timeout_ms=self._operator.timeout_ms, person_steps=self._person)
                 return await self._loop()
         except _OutOfTime:
             return self._end(ExecutionStatus.HARD_ABORT, "TIMEOUT", "the time limit was reached")
@@ -323,8 +353,12 @@ class _Discovery:
                 if call is None:
                     self._no_action += 1
                     if self._no_action >= 2:
-                        return self._end(ExecutionStatus.HARD_ABORT, "STUCK_NO_PROGRESS",
-                                         "two replies in a row had no action")
+                        self._no_action = 0
+                        outcome = await self._stuck("STUCK_NO_PROGRESS", "two replies in a row had no action")
+                        if isinstance(outcome, ExecutionResult):
+                            return outcome
+                        told = outcome
+                        continue
                     told = _Next(NO_ACTION_REPROMPT)
                     continue
                 self._no_action = 0
@@ -372,8 +406,8 @@ class _Discovery:
     async def _handle(self, call: Any, observation: Observation) -> Union[_Next, ExecutionResult]:
         name, args = call.name, dict(call.input)
         if name == "report_stuck":
-            return self._end(ExecutionStatus.HARD_ABORT, f"STUCK_{args['category']}",
-                             f"the model reported it can't continue: {self._clean(args['detail'])}")
+            return await self._stuck(f"STUCK_{args['category']}",
+                                     f"the model reported it can't continue: {self._clean(args['detail'])}", call.id)
         if name == "mark_goal_complete":
             if not self._asserted_here:
                 return _Next(ASSERT_FIRST, call.id, is_error=True)
@@ -443,6 +477,14 @@ class _Discovery:
         if name == "dismiss_overlay":
             return await self._dismiss(step, element, args["reason"], call_id)
         irreversible = step.safety_tier == SafetyTier.IRREVERSIBLE
+        if irreversible and not self._sandbox and self._handoff is not None:
+            refusal = await self._confirmation_refusal()
+            self._irreversible_step = self._irreversible_step or "not_reached"
+            if refusal is not None:
+                return _Next(refusal, call_id, is_error=True)
+            # A person makes the final confirmation. Their click is recorded as this step, and
+            # values that exist only afterwards are read once they hand back.
+            return await self._with_person("IRREVERSIBLE_STEP", "the final confirmation is left to a person", call_id)
         if irreversible and not self._sandbox:
             if self._unread_outputs():
                 # Stopping now would lose the run: an artifact must produce every declared
@@ -489,7 +531,8 @@ class _Discovery:
 
         The same payment check replay makes, so a wrong label in the contract or a wrong
         choice on the way is caught in discovery, not on the first real payment. The limit
-        guards real money and a sandbox has none: only a mismatch stops the click here.
+        guards automatic payments; here a sandbox (no real money) or a person decides, so
+        only a mismatch stops the click, before a person is ever asked.
         """
         checks = self._contract.confirmation_checks
         if not checks:
@@ -534,6 +577,46 @@ class _Discovery:
         self._asserted_here = False
         return _Next(self._with_dialogs("Done: closed. It was not recorded as a step."), call_id)
 
+    async def _stuck(self, code: str, message: str, call_id: Optional[str] = None) -> Union[_Next, ExecutionResult]:
+        # With a person available the agent gets one chance to be unblocked; stuck again, the
+        # run ends as it would without one.
+        if self._handoff is None or self._stuck_handed_off:
+            return self._end(ExecutionStatus.HARD_ABORT, code, message)
+        self._stuck_handed_off = True
+        return await self._with_person(code, message, call_id)
+
+    async def _with_person(self, code: str, message: str, call_id: Optional[str]) -> Union[_Next, ExecutionResult]:
+        """Hand the window to a person; what they do is recorded as the next steps. Hand back →
+        the model is told what was recorded and carries on. Anything else ends the run with
+        nothing saved, since the task wasn't completed."""
+        recorded_before = len(self._recorder.steps)
+        outcome = await self._handoff.request(HandoffRequest(
+            code, reason_for(code), (Choice.HAND_BACK, Choice.STOP), step_index=recorded_before))
+        telemetry = outcome.telemetry
+        self._handoffs.append(telemetry)
+        self._paused_ms += telemetry.duration_ms or 0
+        if telemetry.person_actions is not None:
+            self._people += 1
+        self._unrecorded.extend(outcome.unrecorded)
+        if self._person.irreversible_done:
+            self._irreversible_step = "completed"
+        if outcome.choice != Choice.HAND_BACK:
+            if outcome.window_closed:
+                self._person_end = "window_closed"
+            elif telemetry.resolution == HandoffResolution.OPERATOR_TIMED_OUT:
+                self._person_end = "timed_out"
+            else:
+                self._person_end = "stopped"
+            return self._end(ExecutionStatus.HUMAN_ESCALATED, code, message)
+        self._person_end = "helped"
+        self._asserted_here = False
+        recorded = [step.description for step in self._recorder.steps[recorded_before:]]
+        return _Next(self._clean(person_handed_back(recorded, gap=bool(self._problems()))), call_id)
+
+    def _problems(self) -> list[str]:
+        # What a person did that couldn't be recorded: the recording has a gap.
+        return [*self._person.problems, *self._unrecorded] if self._person is not None else []
+
     def _violation(self, call_id: str) -> Union[_Next, ExecutionResult]:
         self._violations += 1
         if self._violations >= 2:
@@ -542,6 +625,11 @@ class _Discovery:
         return _Next(allowlist_refusal(first=True), call_id, is_error=True)
 
     def _save(self, status: ExecutionStatus) -> ExecutionResult:
+        if self._problems():
+            # A recording with a gap would break every replay at that point: the task is done,
+            # and the result says why nothing was saved.
+            self._person_end = "not_saved"
+            return self._end(status, outputs=dict(self._outputs) or None)
         inputs = ScanInputs(self._run, username_key=self._username_key, extracted=dict(self._read_text))
         built = build_and_save(self._contract, self._recorder.steps, inputs, self._logger)
         if built.error is not None:
@@ -562,13 +650,14 @@ class _Discovery:
         duration_ms = int((time.monotonic() - self._started) * 1000)
         self._logger.run_usage(**self._usage, estimated_cost_usd=estimated_cost_usd(env.anthropic_model, self._usage))
         self._logger.execution_ended(status.value, error.code if error else None, error.message if error else None)
-        self._logger.summary_metrics(duration_ms, len(self._recorder.steps), self._retries, 0)
+        self._logger.summary_metrics(duration_ms, len(self._recorder.steps), self._retries, self._people)
         inputs, shown_outputs = readable_values(self._input_values, outputs or {}, self._contract.confirmation_checks,
                                                 self._contract.output_definitions)
         summary = self._clean(summarize(
             self._contract.capability, "DISCOVERY", status, goal=self._goal, inputs=inputs, outputs=shown_outputs,
             irreversible_step=self._irreversible_step, error=error,
-            escalation=handoff.trigger_reason if handoff else None, version=artifact_version))
+            escalation=handoff.trigger_reason if handoff else None, version=artifact_version,
+            person=self._person_end))
         return ExecutionResult(
             # The run log's trace id, so a result leads straight to its log lines.
             run_id=self._logger.trace_id,
@@ -581,7 +670,7 @@ class _Discovery:
             start_time=self._start_time,
             end_time=datetime.now(timezone.utc),
             duration_ms=duration_ms,
-            handoff_events=[handoff] if handoff else [],
+            handoff_events=[*self._handoffs, *([handoff] if handoff else [])],
             evidence_paths=EvidencePaths(log_file=str(self._logger.log_path), screenshots_dir=str(self._screenshots)),
             terminal_outputs=outputs,
             error=error,
@@ -641,7 +730,7 @@ class _Discovery:
         (self._screenshots / f"{self._logger.trace_id}_turn{self._turns + 1:02d}.png").write_bytes(image)
 
     def _time_left_ms(self) -> int:
-        return int(settings.discovery_timeout_ms - (time.monotonic() - self._started) * 1000)
+        return int(settings.discovery_timeout_ms - (time.monotonic() - self._started) * 1000 + self._paused_ms)
 
 
 def _allowed(url: str, allowed_paths: list[str]) -> bool:

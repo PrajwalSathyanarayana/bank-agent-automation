@@ -11,6 +11,10 @@
 // nothing. Until the person presses Take over, a veil covers the page, so every
 // action on it happens with the person in control and is recorded. Text from
 // the run (why, the task, the step) is set as text, never as markup.
+//
+// Hold mode (discovery): a person's click waits while our code records it as a
+// step, then our own click lets it through; a changed field is handed over too.
+// Elements are handed over by number, kept here while our code looks at them.
 (wordingOf, config) => {
   const STATE = "__bankAgentHandoffBar";
   if (window[STATE]) {
@@ -27,6 +31,26 @@
 
   let takenOver = config.takenOver;
   const fieldsReported = new WeakSet();
+  const held = {};
+  let nextHeld = 0;
+
+  function hand(binding, el) {
+    const send = window[binding];
+    if (typeof send !== "function") {
+      return;
+    }
+    const id = String(++nextHeld);
+    held[id] = el;
+    try {
+      Promise.resolve(send(id))
+        .catch(() => {})
+        .finally(() => {
+          delete held[id];
+        });
+    } catch (error) {
+      delete held[id];
+    }
+  }
 
   function tidy(text) {
     return (text || "").replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
@@ -76,6 +100,7 @@
       .meta { margin-top: 3px; font-size: 12px; color: #d6e2f0; }
       .context { margin: 0; padding: 0; list-style: none; }
       .hint { margin-top: 2px; font-size: 12px; color: #ffd27f; }
+      .notice { margin-top: 2px; font-size: 12px; font-weight: bold; color: #ffd27f; }
     </style>
     <div class="veil"></div>
     <div class="bar" role="region" aria-label="Operator controls">
@@ -89,6 +114,7 @@
         <span class="clock"></span>
       </div>
       <div class="hint"></div>
+      <div class="notice" hidden></div>
     </div>`;
   const part = (name) => root.querySelector(`.${name}`);
   const veil = part("veil");
@@ -97,6 +123,13 @@
   const buttonsBox = part("buttons");
   const hint = part("hint");
   const clock = part("clock");
+  const notice = part("notice");
+
+  // A message for the person, e.g. why a click wasn't followed; empty hides it.
+  function say(text) {
+    notice.textContent = text || "";
+    notice.hidden = !text;
+  }
 
   part("title").textContent = config.title;
   part("why").textContent = config.why;
@@ -186,12 +219,33 @@
     if (el === null) {
       return;
     }
+    if (config.holdClicks && !el.__bankAgentPass) {
+      // Held: the page does nothing until our code has recorded the click and performs it.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hand(config.heldBinding, el);
+      return;
+    }
+    delete el.__bankAgentPass;
     report({
       event: "click",
       what: tidy(wordingOf(el)[0]),
       element_kind: clickKind(el),
       page_path: location.pathname,
     });
+  }
+
+  function onKeydown(event) {
+    if (!config.holdClicks || !takenOver || fromBar(event) || event.key !== "Enter") {
+      return;
+    }
+    const el = event.target;
+    if (el instanceof Element && el.matches("input") && !NOT_FIELDS.has(el.type)) {
+      // Enter would submit the form with no click to record: the person uses the button.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      say("Press the page's button to continue: Enter isn't used while you have control.");
+    }
   }
 
   // The nearest cell to the left with text, stopping at a cell holding another
@@ -248,17 +302,35 @@
     report({ event: "field_changed", what: fieldLabel(el), element_kind: fieldKind(el), page_path: location.pathname });
   }
 
+  function onFieldChanged(event) {
+    // Hold mode: every change is handed over (not only the first), so the step records the
+    // field's final value.
+    const el = event.target;
+    if (!config.holdClicks || !takenOver || fromBar(event) || !(el instanceof Element)) {
+      return;
+    }
+    if (el.matches("input, select, textarea") && !(el.tagName === "INPUT" && NOT_FIELDS.has(el.type))) {
+      hand(config.fieldBinding, el);
+    }
+  }
+
   // On the window, in the capture phase: seen before any handler of the page's
   // own can stop the event.
   window.addEventListener("click", onClick, true);
   window.addEventListener("change", onChange, true);
+  window.addEventListener("change", onFieldChanged, true);
+  window.addEventListener("keydown", onKeydown, true);
   tick();
   const timer = setInterval(tick, 1000);
 
   window[STATE] = {
+    held,
+    say,
     remove() {
       window.removeEventListener("click", onClick, true);
       window.removeEventListener("change", onChange, true);
+      window.removeEventListener("change", onFieldChanged, true);
+      window.removeEventListener("keydown", onKeydown, true);
       clearInterval(timer);
       resized.disconnect();
       host.remove();

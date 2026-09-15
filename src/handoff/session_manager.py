@@ -12,6 +12,10 @@ opened are closed, the page is photographed as they left it, and control returns
 The caller (replay or discovery) awaits request() and touches nothing meanwhile, so no
 second party contends for the lock: it records who holds control, and a report from the
 bar counts only with the current handoff's token.
+
+Given a PersonSteps (discovery), the bar holds each of the person's clicks and hands it,
+and every changed field, to it to be recorded as a step; one at a time, in the order the
+person acted. Replay gives none: the person's actions are only logged.
 """
 import asyncio
 import secrets
@@ -23,11 +27,22 @@ from pathlib import Path
 from typing import Any, Literal, Optional, Protocol
 from urllib.parse import urlsplit
 
+from playwright.async_api import ElementHandle, Frame, Page
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Frame, Page
 
 from src.config.settings import settings
-from src.handoff.control_bar import TAKE_OVER, BINDING, BarContent, Button, remove_bar, show_bar
+from src.handoff.control_bar import (
+    BINDING,
+    FIELD_BINDING,
+    HELD_BINDING,
+    TAKE_OVER,
+    BarContent,
+    Button,
+    held_element,
+    remove_bar,
+    say,
+    show_bar,
+)
 from src.observability.logger import RunLogger
 from src.safety.redactor import redact_dict
 from src.surface.browser import BrowserSession
@@ -101,6 +116,9 @@ class HandoffOutcome:
     window_closed: bool
     pause_screenshot: Optional[str]
     back_screenshot: Optional[str]
+    # Actions of the person's that couldn't be recorded as steps (a recorder failure), so
+    # the recording can't be trusted to be complete.
+    unrecorded: tuple[str, ...] = ()
 
     @property
     def resolution(self) -> HandoffResolution:
@@ -111,6 +129,18 @@ class Announcer(Protocol):
     """Where handoff announcements go, for anyone not looking at the run's window."""
 
     async def announce(self, announcement: dict[str, Any]) -> None:
+        ...
+
+
+class PersonSteps(Protocol):
+    """Records the person's actions as steps (discovery). Each call gets the live element
+    and returns None once the action is recorded (a click also performed), or a message
+    for the person when it was refused and not performed."""
+
+    async def clicked(self, element: ElementHandle) -> Optional[str]:
+        ...
+
+    async def changed(self, element: ElementHandle) -> Optional[str]:
         ...
 
 
@@ -133,6 +163,7 @@ class _Handoff:
     taken_over: bool = False
     actions: list[PersonAction] = field(default_factory=list)
     extra_pages: list[Page] = field(default_factory=list)
+    unrecorded: list[str] = field(default_factory=list)
 
 
 class HandoffManager:
@@ -148,8 +179,12 @@ class HandoffManager:
         screenshots_dir: Path,
         announcer: Optional[Announcer] = None,
         timeout_ms: Optional[int] = None,
+        person_steps: Optional[PersonSteps] = None,
     ) -> None:
         self._session = session
+        self._steps = person_steps
+        # One of the person's actions recorded at a time, in the order they came.
+        self._step_lock = asyncio.Lock()
         self._logger = logger
         self._capability = capability
         self._goal = goal
@@ -194,6 +229,12 @@ class HandoffManager:
         try:
             await self._show(page, handoff)
             await asyncio.wait({handoff.ended}, timeout=self._timeout_s)
+            # Dialogs first: while one is open the page is frozen, and nothing else could run.
+            dismissed = await self._session.take_back_dialogs()
+            # Then whatever is still under way (an action the person made before handing back,
+            # a bar redraw), while its reports and page visits still count. New actions are
+            # refused from here: the handoff has ended.
+            await self._settle_tasks()
         finally:
             for event, listener in listeners.items():
                 page.remove_listener(event, listener)
@@ -201,16 +242,14 @@ class HandoffManager:
             # Late reports from the bar are ignored from here on.
             self._active = None
         choice, window_closed = handoff.ended.result() if handoff.ended.done() else (None, False)
-        return await self._hand_back(page, handoff, choice, window_closed, triggered, started, pause_screenshot)
+        return await self._hand_back(page, handoff, choice, window_closed, triggered, started, pause_screenshot,
+                                     dismissed)
 
     # ------------------------------------------------------------------ hand-back
 
     async def _hand_back(self, page: Page, handoff: _Handoff, choice: Optional[Choice], window_closed: bool,
-                         triggered: datetime, started: float, pause_screenshot: Optional[str]) -> HandoffOutcome:
-        # Dialogs first: while one is open the page is frozen, and nothing else could run.
-        dismissed = await self._session.take_back_dialogs()
-        # Then any bar redraw still running, so none can put the bar back after its removal.
-        await self._settle_tasks()
+                         triggered: datetime, started: float, pause_screenshot: Optional[str],
+                         dismissed: list[str]) -> HandoffOutcome:
         back_screenshot = None
         if not window_closed:
             await _quietly(remove_bar(page))
@@ -237,7 +276,7 @@ class HandoffManager:
         await self._announce("HANDOFF_RESOLVED", resolution=resolution.value, window_closed=window_closed,
                              person_actions=person_actions, duration_ms=duration_ms)
         return HandoffOutcome(choice, telemetry, tuple(handoff.actions), tuple(dismissed), window_closed,
-                              pause_screenshot, back_screenshot)
+                              pause_screenshot, back_screenshot, tuple(handoff.unrecorded))
 
     # ------------------------------------------------------------------ the bar's reports
 
@@ -245,6 +284,9 @@ class HandoffManager:
         # A binding outlives page loads but can be exposed only once per page.
         if self._bound_page is not page:
             await page.expose_binding(BINDING, self._on_report)
+            if self._steps is not None:
+                await page.expose_binding(HELD_BINDING, self._on_held_click)
+                await page.expose_binding(FIELD_BINDING, self._on_changed_field)
             self._bound_page = page
 
     def _on_report(self, source: Any, payload: Any) -> None:
@@ -276,6 +318,42 @@ class HandoffManager:
     def _record(self, handoff: _Handoff, action: PersonAction) -> None:
         handoff.actions.append(action)
         self._logger.person_action(action.kind, action.page_path, what=action.what, element_kind=action.element_kind)
+
+    # ------------------------------------------------------------------ the person's steps
+
+    async def _on_held_click(self, source: Any, element_id: Any) -> None:
+        await self._person_step("click", element_id)
+
+    async def _on_changed_field(self, source: Any, element_id: Any) -> None:
+        await self._person_step("field", element_id)
+
+    async def _person_step(self, kind: str, element_id: Any) -> None:
+        handoff = self._active
+        if handoff is None or self._steps is None or not handoff.taken_over or handoff.ended.done():
+            return
+        # Tracked like the bar's redraws, so a hand-back waits for an action already under way:
+        # the person made it before handing back.
+        await self._spawn(self._record_step(handoff, kind, str(element_id)))
+
+    async def _record_step(self, handoff: _Handoff, kind: str, element_id: str) -> None:
+        page = self._session.page
+        async with self._step_lock:
+            try:
+                # Fetched while the page still waits on this call: it keeps the element until then.
+                element = await held_element(page, element_id)
+            except PlaywrightError:
+                element = None
+            if element is None:
+                return
+            try:
+                refusal = await (self._steps.clicked(element) if kind == "click" else self._steps.changed(element))
+            except Exception as error:
+                # A failure here would vanish inside the page's call, and whether the action
+                # happened is unknown: it is kept, so the recording isn't trusted as complete.
+                handoff.unrecorded.append(f"a {'click' if kind == 'click' else 'field change'} couldn't be "
+                                          f"recorded ({type(error).__name__})")
+                refusal = "That couldn't be recorded, so this run won't save what it learned. You can carry on."
+            await _quietly(say(page, refusal or ""))
 
     # ------------------------------------------------------------------ page events
 
@@ -319,7 +397,8 @@ class HandoffManager:
             context.append(f"{where}: {request.step_description}" if request.step_description else where)
         content = BarContent(token=handoff.token, why=request.why, context=tuple(context),
                              buttons=tuple(Button(choice.value, LABELS[choice]) for choice in request.choices),
-                             deadline=handoff.deadline, taken_over=handoff.taken_over)
+                             deadline=handoff.deadline, taken_over=handoff.taken_over,
+                             hold_clicks=self._steps is not None)
         # A page still loading may refuse the script; its load event shows the bar again.
         await _quietly(show_bar(page, content))
 
@@ -344,10 +423,11 @@ class HandoffManager:
             # announcement must never stop the run.
             pass
 
-    def _spawn(self, work) -> None:
+    def _spawn(self, work) -> asyncio.Task:
         task = asyncio.get_running_loop().create_task(work)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
     async def _settle_tasks(self) -> None:
         # Announcements and bar redraws still running finish before the hand-back is told.

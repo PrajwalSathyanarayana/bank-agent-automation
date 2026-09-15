@@ -214,6 +214,21 @@ def page_blocks(screenshot_png: bytes, element_list: str) -> list[dict[str, Any]
     ]
 
 
+def person_handed_back(recorded: Sequence[str], gap: bool) -> str:
+    """What the model is told when a person hands control back: the steps their actions were
+    recorded as, and to carry on from the page as it now is."""
+    if recorded:
+        done = "\n".join(f"- {description}" for description in recorded)
+        text = ("A person had control and did the following; each was recorded as a step:\n"
+                f"{done}\n"
+                "Carry on from the page as it is now: check the result, read any values still needed, then finish.")
+    else:
+        text = "A person had control and handed back without doing anything. Carry on from the page as it is now."
+    if gap:
+        text += " Something they did couldn't be recorded, so this run won't be saved; still finish the task."
+    return text
+
+
 _ELEMENT = {"type": "integer", "description": "The element's number from the latest list."}
 _REASON = {"type": "string", "description": "What this step does and why, without this run's values."}
 

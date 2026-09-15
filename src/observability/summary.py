@@ -109,7 +109,8 @@ def summarize(
     """The result in a sentence or two. inputs and outputs are already as a person reads them.
 
     person says how a person took part, when one had the run's window: "helped" (handed it
-    back and the run went on), "finished", "stopped", "timed_out" or "window_closed".
+    back and the run went on), "finished", "stopped", "timed_out", "window_closed", or
+    "not_saved" (a discovery a person helped whose recording had a gap).
     """
     wording = WORDING.get(capability)
     action = wording.action if wording else "irreversible step"
@@ -140,6 +141,9 @@ def summarize(
         parts += [asked, f"Stopped{where}: {_reason(code)} ({code})."]
     if person == "helped":
         parts.append("A person had control during the run.")
+    elif person == "not_saved":
+        parts.append("Not saved as learned: something a person did couldn't be recorded, so the next request will "
+                     "run discovery again.")
     # A completed payment already reads from the "Paid …" sentence.
     if not (irreversible_step == "completed" and (status == ExecutionStatus.SUCCESS or person == "finished")):
         parts.append(_irreversible_sentence(action, irreversible_step))

@@ -5,6 +5,7 @@ import re
 from types import SimpleNamespace
 import math
 import struct
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from io import BytesIO
 
@@ -53,6 +54,8 @@ from src.discovery.locators import (
 )
 from src.discovery import backstop
 from src.discovery.agent import DiscoveryRequest, ModelCallFailed, ModelReply, discover, estimated_cost_usd
+from src.discovery.person_steps import PersonStepRecorder
+from src.handoff.session_manager import OperatorSetup
 from src.discovery.artifact_builder import ArtifactContract, UnsignedArtifact, build_and_save, write_artifact
 from src.discovery.backstop import (
     AbortCode,
@@ -120,6 +123,7 @@ from src.discovery.perception import (
     choose_elements,
     describe,
     describe_options,
+    element_for,
     element_kind,
     mark,
     mark_colour,
@@ -1004,6 +1008,27 @@ async def test_releasing_after_the_page_has_moved_on_is_harmless(page):
     await observation.release()
     with pytest.raises(ObservationReleased):
         observation.element(1)
+
+
+# --- perception: the element a person picked, read like the model's list ---
+
+@pytest.mark.anyio
+async def test_the_element_a_person_clicked_reads_like_its_entry_in_the_models_list(page):
+    await page.goto("/login")
+    async with observing(page) as observation:
+        [listed] = [element for element in observation.elements if element.facts.input_type == "submit"]
+        found = await element_for(page, await page.query_selector("input[value='Log In']"))
+        assert (found.facts, found.description, found.in_viewport) == (
+            listed.facts, listed.description, listed.in_viewport)
+        # So its locators are derived and proven exactly as the model's would be.
+        derived = await derive_locators(page, found, _bank_run())
+        assert derived.locators and not derived.weak
+
+
+@pytest.mark.anyio
+async def test_an_element_the_list_wouldnt_show_has_no_entry(page):
+    await page.goto("/login")
+    assert await element_for(page, await page.query_selector("td.lbl")) is None
 
 
 # --- locators: generating candidates ---
@@ -2614,6 +2639,156 @@ def test_progress_and_page_blocks_are_packaged_for_the_model():
     assert elements == {"type": "text", "text": "Elements you can act on:\n[1] link \"Home\""}
 
 
+# --- person steps: what a person does in a handoff, recorded as steps (browser) ---
+
+@asynccontextmanager
+async def _person_recording(run_logger, mock_bank_url, member_id="10234", interruptions=()):
+    """A session on the bank's login page with the start step recorded, and the recorder
+    for a person's actions; the bank's own boxes are left for the person, as in a handoff."""
+    run = _bank_run(member_id)
+    async with BrowserSession(run_logger) as session:
+        page = session.page
+        await page.goto(f"{mock_bank_url}/login")
+        recorder = Recorder(run_logger)
+        await recorder.commit(recorder.draft_start(page.url), page, run, derived=None)
+        session.leave_dialogs_to_person()
+        yield page, recorder, PersonStepRecorder(recorder, session, run, BILL_PAY_PAGES, username_key="bank_username",
+                                                 known_interruptions=interruptions, logger=run_logger)
+
+
+async def _signed_in_at(page, mock_bank_url, path) -> None:
+    # Reaching a page by hand, before the person's recorded actions begin.
+    await page.fill("input[name='username']", env.mock_bank_username)
+    await page.fill("input[name='password']", env.mock_bank_password.get_secret_value())
+    await page.click("input[type='submit']")
+    await page.wait_for_url("**/dashboard")
+    await page.goto(f"{mock_bank_url}{path}")
+
+
+async def _at_the_confirm_screen(page, mock_bank_url) -> None:
+    # Member 40412: a payment really moves money in the test bank, which runs for the whole
+    # session, and later tests read 10234's balance as an exact figure.
+    await _signed_in_at(page, mock_bank_url, "/search")
+    await page.fill("input[name='member_id']", "40412")
+    await page.click("input[value='Search']")
+    await page.click("div.actions a[href='/billpay']")
+    await page.select_option("select[name='payee_id']", label="Desert Valley Water Utility")
+    await page.fill("input[name='amount']", "50")
+    await page.click("input[value='Continue']")
+    await page.wait_for_url("**/billpay/confirm")
+
+
+@pytest.mark.anyio
+async def test_a_persons_sign_in_is_recorded_as_placeholders_never_values(mock_bank_url, run_logger, dashboard_popup):
+    dashboard_popup(False)
+    async with _person_recording(run_logger, mock_bank_url) as (page, recorder, person):
+        await page.fill("input[name='username']", env.mock_bank_username)
+        assert await person.changed(await page.query_selector("input[name='username']")) is None
+        await page.fill("input[name='password']", env.mock_bank_password.get_secret_value())
+        assert await person.changed(await page.query_selector("input[name='password']")) is None
+        assert await person.clicked(await page.query_selector("input[value='Log In']")) is None
+        steps = recorder.steps
+        assert [(step.action, step.input_value) for step in steps[1:]] == [
+            (ActionType.TYPE, "{credential:bank_username}"), (ActionType.TYPE, "{credential:bank_password}"),
+            (ActionType.CLICK, None)]
+        assert all(step.description.endswith("(done by a person)") for step in steps[1:])
+        # The click is recorded as the agent's would be: proven locators, checks of where it landed.
+        assert steps[3].locators and ("page_path", "/dashboard") in [
+            (check.type.value, check.expected_value) for check in steps[3].checkpoints]
+        assert (person.recorded, person.problems) == (3, [])
+    assert env.mock_bank_password.get_secret_value() not in run_logger.log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_a_value_matching_no_input_isnt_stored_and_is_kept_as_a_problem(mock_bank_url, run_logger,
+                                                                            dashboard_popup):
+    dashboard_popup(False)
+    async with _person_recording(run_logger, mock_bank_url) as (page, recorder, person):
+        await _signed_in_at(page, mock_bank_url, "/search")
+        await page.fill("input[name='member_id']", "55555")
+        told = await person.changed(await page.query_selector("input[name='member_id']"))
+        assert "won't save what it learned" in told
+        assert len(recorder.steps) == 1 and len(person.problems) == 1
+        assert "55555" not in person.problems[0]
+
+
+@pytest.mark.anyio
+async def test_a_field_saved_again_unchanged_adds_no_second_step(mock_bank_url, run_logger, dashboard_popup):
+    dashboard_popup(False)
+    async with _person_recording(run_logger, mock_bank_url) as (page, recorder, person):
+        await _signed_in_at(page, mock_bank_url, "/search")
+        field = await page.query_selector("input[name='member_id']")
+        await page.fill("input[name='member_id']", "10234")
+        for _ in range(2):
+            assert await person.changed(field) is None
+        assert [step.input_value for step in recorder.steps[1:]] == ["{member_id}"]
+
+
+@pytest.mark.anyio
+async def test_a_link_outside_the_tasks_pages_isnt_followed(mock_bank_url, run_logger, dashboard_popup):
+    dashboard_popup(False)
+    async with _person_recording(run_logger, mock_bank_url) as (page, recorder, person):
+        await _signed_in_at(page, mock_bank_url, "/member/10234")
+        told = await person.clicked(await page.query_selector("a[href='/member/10234/edit']"))
+        assert told == "That leads outside the pages this task may use, so it wasn't followed."
+        assert page.url.endswith("/member/10234") and len(recorder.steps) == 1
+
+
+@pytest.mark.anyio
+async def test_a_person_clearing_a_declared_popup_isnt_recorded_as_a_step(mock_bank_url, run_logger, dashboard_popup):
+    # The popup doesn't appear on every visit, and replay clears it by itself whenever it does,
+    # so a step for it would break the replays where it isn't there.
+    dashboard_popup(True)
+    async with _person_recording(run_logger, mock_bank_url, interruptions=[PROMO_POPUP]) as (page, recorder, person):
+        await _signed_in_at(page, mock_bank_url, "/dashboard")
+        close = await page.query_selector("div.overlay input[value='Close']")
+        assert await person.clicked(close) is None
+        assert not await page.locator("div.overlay").is_visible()
+        assert (len(recorder.steps), person.recorded) == (1, 0)
+    assert "OVERLAY_DISMISSED" in [line["event_type"] for line in _log_lines(run_logger)]
+
+
+@pytest.mark.anyio
+async def test_a_payee_chosen_by_a_person_is_recorded_as_the_payee_input(mock_bank_url, run_logger, dashboard_popup):
+    dashboard_popup(False)
+    async with _person_recording(run_logger, mock_bank_url) as (page, recorder, person):
+        await _signed_in_at(page, mock_bank_url, "/search")
+        await page.fill("input[name='member_id']", "10234")
+        await page.click("input[value='Search']")
+        await page.click("div.actions a[href='/billpay']")
+        await page.select_option("select[name='payee_id']", label="Sunbelt Electric Co")
+        assert await person.changed(await page.query_selector("select[name='payee_id']")) is None
+        chosen = recorder.steps[-1]
+        # The payee is this run's input, so no fixed hidden value is kept for it.
+        assert (chosen.action, chosen.input_value, chosen.option_value) == (ActionType.SELECT, "{payee_name}", None)
+
+
+@pytest.mark.anyio
+async def test_a_payment_the_person_cancels_is_not_recorded_and_one_they_confirm_is(mock_bank_url, run_logger,
+                                                                                   dashboard_popup):
+    dashboard_popup(False)
+    async with _person_recording(run_logger, mock_bank_url, member_id="40412") as (page, recorder, person):
+        await _at_the_confirm_screen(page, mock_bank_url)
+        confirm = await page.query_selector("input[value='Confirm Payment']")
+
+        async def cancel(dialog):
+            await dialog.dismiss()
+
+        page.once("dialog", cancel)
+        assert await person.clicked(confirm) is None
+        assert len(recorder.steps) == 1 and not person.irreversible_done  # nothing happened
+
+        async def ok(dialog):
+            await dialog.accept()
+
+        page.once("dialog", ok)
+        assert await person.clicked(await page.query_selector("input[value='Confirm Payment']")) is None
+        paid = recorder.steps[-1]
+        assert (paid.action, paid.safety_tier, person.irreversible_done) == (
+            ActionType.CLICK, SafetyTier.IRREVERSIBLE, True)
+        assert "Payment Submitted Successfully" in await page.inner_text("body")
+
+
 # --- agent: the discovery loop, driven by a scripted model (no API calls) ---
 
 class ScriptedModel:
@@ -3099,6 +3274,120 @@ async def test_a_confirm_screen_that_doesnt_match_the_request_is_not_confirmed(d
     assert result.summary.endswith("No payment was made.")
 
 
+# --- agent: a person in the loop (a run with an operator) ---
+
+HANDOFF_BAR = "[data-bank-agent-handoff]"
+WITH_A_PERSON = {"operator": OperatorSetup(timeout_ms=60_000)}
+SEARCH_CHECK = ("assert_visible", {"expected_text": "Member ID:", "reason": "Check the search page"})
+DONE = ("mark_goal_complete", {"summary": "Done"})
+
+
+@pytest.fixture
+def discovery_sessions(monkeypatch) -> list:
+    """Every browser session discovery opens, so a test can act as the person at its window."""
+    sessions = []
+
+    class _Kept(BrowserSession):
+        async def __aenter__(self):
+            session = await super().__aenter__()
+            sessions.append(session)
+            return session
+
+    monkeypatch.setattr("src.discovery.agent.BrowserSession", _Kept)
+    return sessions
+
+
+async def _person_takes_over(sessions):
+    await _until(lambda: sessions, timeout_s=30)
+    page = sessions[-1].page
+    await page.locator(f"{HANDOFF_BAR} button", has_text="Take over").click(timeout=30_000)
+    await page.locator(f"{HANDOFF_BAR} button", has_text="Hand back").wait_for(timeout=10_000)
+    return page
+
+
+async def _person_presses(page, label):
+    # Waited for: after a page load the bar comes back a moment later.
+    await page.locator(f"{HANDOFF_BAR} button", has_text=label).click(timeout=10_000)
+
+
+@pytest.mark.anyio
+async def test_a_person_who_unblocks_the_agent_has_their_steps_saved_in_the_artifact(
+    discovery, discovery_sessions, dashboard_popup, storage
+):
+    dashboard_popup(False)
+    run = asyncio.create_task(discovery(*SIGN_IN, STOP, SEARCH_CHECK, DONE, **WITH_A_PERSON))
+    page = await _person_takes_over(discovery_sessions)
+    await page.click("a[href='/search']")  # the person opens member search
+    await _person_presses(page, "Hand back")
+    result, model = await asyncio.wait_for(run, timeout=90)
+
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
+    artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
+    verify(artifact, env.artifact_signing_key)
+    # The agent's sign-in, the person's click, then the agent's check: one recording.
+    assert [step.description for step in artifact.steps[4:]] == [
+        'Clicked "Member Search" (done by a person)', "Check the search page"]
+    assert artifact.steps[4].locators
+    [handoff] = result.handoff_events
+    assert (handoff.trigger_reason, handoff.resolution) == ("STUCK_NO_PROGRESS", HandoffResolution.RESUMED)
+    # The model is told what the person's actions were recorded as.
+    assert 'Clicked "Member Search" (done by a person)' in _texts(model.received[4])[0]
+    assert result.summary.endswith("A person had control during the run. Learned and saved as version 1.0.0.")
+
+
+@pytest.mark.anyio
+async def test_a_value_the_person_types_that_isnt_an_input_means_nothing_is_saved(
+    discovery, discovery_sessions, dashboard_popup, storage
+):
+    dashboard_popup(False)
+    to_search = ("click", {"element": 'link "Member Search"', "reason": "Open member search"})
+    run = asyncio.create_task(discovery(*SIGN_IN, to_search, STOP, SEARCH_CHECK, DONE, **WITH_A_PERSON))
+    page = await _person_takes_over(discovery_sessions)
+    field = page.locator("input[name='member_id']")
+    await field.fill("55555")
+    await field.press("Tab")  # the change is reported when the field loses focus, as for a person
+    await page.locator(f"{HANDOFF_BAR} .notice", has_text="can't be saved").wait_for(timeout=10_000)
+    await _person_presses(page, "Hand back")
+    result, _ = await asyncio.wait_for(run, timeout=90)
+
+    assert (result.status, result.artifact_version) == (ExecutionStatus.SUCCESS, None)
+    assert not storage.exists()
+    assert result.summary.endswith("Not saved as learned: something a person did couldn't be recorded, so the next "
+                                   "request will run discovery again.")
+
+
+@pytest.mark.anyio
+async def test_a_person_who_stops_the_task_ends_the_run_with_nothing_saved(
+    discovery, discovery_sessions, dashboard_popup, storage
+):
+    dashboard_popup(False)
+    run = asyncio.create_task(discovery(*SIGN_IN, STOP, **WITH_A_PERSON))
+    page = await _person_takes_over(discovery_sessions)
+    await _person_presses(page, "Stop the task")
+    result, _ = await asyncio.wait_for(run, timeout=90)
+
+    assert (result.status, result.error.code) == (ExecutionStatus.HUMAN_ESCALATED, "STUCK_NO_PROGRESS")
+    assert [h.resolution for h in result.handoff_events] == [HandoffResolution.ABORTED]
+    assert not storage.exists()
+    assert result.summary.endswith("A person was needed (the learning agent got stuck) and stopped the task.")
+
+
+@pytest.mark.anyio
+async def test_stuck_again_after_a_hand_back_ends_the_run_as_without_a_person(
+    discovery, discovery_sessions, dashboard_popup
+):
+    dashboard_popup(False)
+    run = asyncio.create_task(discovery(*SIGN_IN, STOP, STOP, **WITH_A_PERSON))
+    page = await _person_takes_over(discovery_sessions)
+    await _person_presses(page, "Hand back")
+    result, model = await asyncio.wait_for(run, timeout=90)
+
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "STUCK_NO_PROGRESS")
+    assert [h.resolution for h in result.handoff_events] == [HandoffResolution.RESUMED]
+    assert _texts(model.received[4])[0].startswith("A person had control and handed back without doing anything.")
+
+
 # Kept last in the file: these tests really pay in the shared test bank, which changes the
 # member's balance for anything that runs after them in the same session.
 NEW_BALANCE_OUTPUT = OutputParamDefinition(key="new_checking_balance", type=OutputType.STRING,
@@ -3147,3 +3436,37 @@ async def test_in_a_sandbox_the_payment_is_confirmed_once_the_screen_matches_the
     assert events.index("AUTHORIZATION_CHECKED") < events.index("IRREVERSIBLE_EXECUTED")
     assert result.irreversible_step == "completed"
     assert result.summary == "Paid $50.00 to Sunbelt Electric Co for member 10234. Learned and saved as version 1.0.0."
+
+
+@pytest.mark.anyio
+async def test_in_production_a_person_confirms_the_payment_and_it_is_saved_as_their_step(
+    discovery, discovery_sessions, dashboard_popup, storage, run_logger
+):
+    dashboard_popup(False)
+    paid = ("assert_visible", {"expected_text": "Payment Submitted Successfully", "reason": "Check it went through"})
+    run = asyncio.create_task(discovery(*TO_CONFIRM_PAGE, CONFIRM, paid, DONE, checks=PAYMENT_CHECKS,
+                                        **WITH_A_PERSON))
+    page = await _person_takes_over(discovery_sessions)
+
+    async def ok(dialog):
+        await dialog.accept()
+
+    page.once("dialog", ok)  # the person presses OK in the bank's own box
+    await page.click("input[value='Confirm Payment']")
+    await page.locator("div.msg-ok").wait_for(timeout=10_000)
+    await _person_presses(page, "Hand back")
+    result, model = await asyncio.wait_for(run, timeout=90)
+
+    assert result.status == ExecutionStatus.SUCCESS, result.error
+    assert result.irreversible_step == "completed"
+    [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
+    artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
+    confirmed, checked = artifact.steps[12], artifact.steps[13]
+    assert (confirmed.description, confirmed.safety_tier) == (
+        'Clicked "Confirm Payment" (done by a person)', SafetyTier.IRREVERSIBLE)
+    assert confirmed.checkpoints and checked.action == ActionType.ASSERT_TEXT
+    # The payment check ran before a person was asked.
+    [check] = [line for line in _log_lines(run_logger) if line["event_type"] == "AUTHORIZATION_CHECKED"]
+    assert check["authorized"] is True
+    assert result.summary == ("Paid $50.00 to Sunbelt Electric Co for member 10234. A person had control during "
+                              "the run. Learned and saved as version 1.0.0.")

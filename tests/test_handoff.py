@@ -13,7 +13,19 @@ import pytest
 from websockets.asyncio.client import connect as ws_connect
 
 from src.config.settings import settings
-from src.handoff.control_bar import BINDING, TAKE_OVER, BarContent, Button, remove_bar, show_bar
+from src.handoff.control_bar import (
+    BINDING,
+    FIELD_BINDING,
+    HELD_BINDING,
+    TAKE_OVER,
+    BarContent,
+    Button,
+    held_element,
+    let_through,
+    remove_bar,
+    say,
+    show_bar,
+)
 from src.handoff.session_manager import Choice, HandoffManager, HandoffRequest
 from src.handoff.watch import describe
 from src.handoff.ws_server import FEED_HOST, FeedUnavailable, HandoffFeed
@@ -210,6 +222,89 @@ async def test_in_a_short_window_the_bar_stays_in_view_and_the_page_moves_below_
     assert (await page.locator("#pay").bounding_box())["y"] == before
 
 
+FORM = ("<form onsubmit=\"document.title = 'submitted'; return false;\">"
+        "<table><tr><td>Amount:</td><td><input name='amount'></td></tr></table>"
+        "<input type='submit' id='go' value='Continue'></form>")
+
+
+async def _holding(page) -> tuple[list, list, list[dict]]:
+    """A page with the bar in hold mode, taken over; the elements handed over for held
+    clicks and changed fields, and the ordinary reports."""
+    clicks, fields = [], []
+
+    # The page keeps a handed-over element only while our code answers, so it is fetched
+    # before answering, as the session manager does.
+    async def on_click(source, element_id):
+        clicks.append(await held_element(page, element_id))
+
+    async def on_field(source, element_id):
+        fields.append(await held_element(page, element_id))
+
+    await page.expose_binding(HELD_BINDING, on_click)
+    await page.expose_binding(FIELD_BINDING, on_field)
+    reports = await _listening(page)
+    await page.set_content(FORM)
+    await show_bar(page, _content(hold_clicks=True))
+    await _take_over(page, reports)
+    return clicks, fields, reports
+
+
+@pytest.mark.anyio
+async def test_in_hold_mode_a_persons_click_waits_until_our_own_click_lets_it_through(page):
+    clicks, fields, reports = await _holding(page)
+    await page.click("#go")
+    await _until(lambda: clicks)
+    assert await page.title() == ""  # held: the form did nothing
+    element = clicks[0]
+    assert await element.get_attribute("value") == "Continue"
+    await let_through(element)
+    await element.click()
+    await page.wait_for_function("document.title === 'submitted'", timeout=5_000)
+    # Only the click that went through is reported, once; it wasn't held a second time.
+    await _until(lambda: len(reports) == 2)
+    assert (reports[1]["event"], reports[1]["what"], len(clicks)) == ("click", "Continue", 1)
+
+
+@pytest.mark.anyio
+async def test_in_hold_mode_every_change_to_a_field_is_handed_over(page):
+    clicks, fields, reports = await _holding(page)
+    amount = page.locator("input[name='amount']")
+    for text in ("50", "75"):
+        await amount.fill(text)
+        await amount.dispatch_event("change")
+    await _until(lambda: len(fields) == 2)
+    assert await fields[-1].input_value() == "75"
+    # The log still hears of the field once, by its label, never its value.
+    assert [(r["event"], r["what"]) for r in reports[1:]] == [("field_changed", "Amount:")]
+
+
+@pytest.mark.anyio
+async def test_in_hold_mode_enter_doesnt_submit_and_the_person_is_told_why(page):
+    clicks, fields, reports = await _holding(page)
+    await page.locator("input[name='amount']").press("Enter")
+    await asyncio.sleep(0.2)
+    assert await page.title() == ""
+    assert "Enter isn't used" in await page.locator(f"{HOST} .notice").inner_text()
+
+
+@pytest.mark.anyio
+async def test_a_message_can_be_shown_to_the_person_and_cleared(page):
+    await page.set_content(PAGE)
+    await show_bar(page, _content())
+    await say(page, "That link leads outside this task's pages, so it wasn't followed.")
+    assert await page.locator(f"{HOST} .notice").inner_text() == (
+        "That link leads outside this task's pages, so it wasn't followed.")
+    await say(page, "")
+    assert not await page.locator(f"{HOST} .notice").is_visible()
+
+
+@pytest.mark.anyio
+async def test_an_element_no_longer_kept_is_none(page):
+    await page.set_content(PAGE)
+    await show_bar(page, _content(hold_clicks=True))
+    assert await held_element(page, "99") is None
+
+
 @pytest.mark.anyio
 async def test_the_clock_says_when_time_is_up(page):
     await page.set_content(PAGE)
@@ -254,7 +349,8 @@ class _Feed:
 
 
 @asynccontextmanager
-async def _handing_off(logger, tmp_path, request, *, url=None, content=None, timeout_ms=10_000, feed=None):
+async def _handing_off(logger, tmp_path, request, *, url=None, content=None, timeout_ms=10_000, feed=None,
+                       steps=None):
     """A session on a page, a handoff requested on it and its bar up; yields the session,
     the manager and the pending request."""
     async with BrowserSession(logger) as session:
@@ -263,7 +359,8 @@ async def _handing_off(logger, tmp_path, request, *, url=None, content=None, tim
         else:
             await session.page.set_content(content or PAGE)
         manager = HandoffManager(session, logger, capability="member_servicing_and_bill_pay", goal=GOAL,
-                                 screenshots_dir=tmp_path / "shots", announcer=feed, timeout_ms=timeout_ms)
+                                 screenshots_dir=tmp_path / "shots", announcer=feed, timeout_ms=timeout_ms,
+                                 person_steps=steps)
         pending = asyncio.create_task(manager.request(request))
         await session.page.locator(f"{HOST} button", has_text="Take over").wait_for(timeout=10_000)
         try:
@@ -423,6 +520,104 @@ async def test_one_handoff_at_a_time(handoff_logger, tmp_path):
     async with _handing_off(handoff_logger, tmp_path, AT_THE_PAYMENT) as (session, manager, pending):
         with pytest.raises(RuntimeError, match="already in progress"):
             await manager.request(EARLIER)
+
+
+# --- the person's actions handed to discovery to be recorded as steps ---
+
+class _Steps:
+    """Stands in for discovery's recorder: notes each action, then performs a click."""
+
+    def __init__(self, refuse=None, fail=False, click_takes_s=0.0, change_takes_s=0.0):
+        self.calls: list[tuple[str, str]] = []
+        self.finished: list[str] = []
+        self._refuse, self._fail = refuse, fail
+        self._click_takes_s, self._change_takes_s = click_takes_s, change_takes_s
+
+    async def clicked(self, element):
+        self.calls.append(("clicked", await element.get_attribute("value")))
+        await asyncio.sleep(self._click_takes_s)
+        if self._fail:
+            raise RuntimeError("the recorder broke")
+        if self._refuse:
+            return self._refuse
+        await let_through(element)
+        await element.click()
+        self.finished.append("clicked")
+        return None
+
+    async def changed(self, element):
+        self.calls.append(("changed", await element.input_value()))
+        await asyncio.sleep(self._change_takes_s)
+        return None
+
+
+@pytest.mark.anyio
+async def test_a_persons_click_is_handed_to_be_recorded_then_performed(handoff_logger, tmp_path):
+    steps = _Steps()
+    async with _handing_off(handoff_logger, tmp_path, EARLIER, content=FORM, steps=steps) as (session, manager, pending):
+        await _taken_over(session, manager)
+        await session.page.click("#go")
+        await session.page.wait_for_function("document.title === 'submitted'", timeout=5_000)
+        await _press(session.page, "Hand back")
+        outcome = await asyncio.wait_for(pending, timeout=10)
+    assert steps.calls == [("clicked", "Continue")]
+    assert outcome.unrecorded == ()
+    assert [(action.kind, action.what) for action in outcome.actions] == [("click", "Continue")]
+
+
+@pytest.mark.anyio
+async def test_a_refused_click_isnt_performed_and_the_person_is_told_why(handoff_logger, tmp_path):
+    refusal = "That link leads outside this task's pages, so it wasn't followed."
+    steps = _Steps(refuse=refusal)
+    async with _handing_off(handoff_logger, tmp_path, EARLIER, content=FORM, steps=steps) as (session, manager, pending):
+        await _taken_over(session, manager)
+        await session.page.click("#go")
+        await session.page.locator(f"{HOST} .notice", has_text="outside this task").wait_for(timeout=5_000)
+        assert await session.page.title() == ""
+        await _press(session.page, "Stop the task")
+        outcome = await asyncio.wait_for(pending, timeout=10)
+    assert outcome.unrecorded == ()
+
+
+@pytest.mark.anyio
+async def test_an_action_that_couldnt_be_recorded_is_kept_and_the_person_told(handoff_logger, tmp_path):
+    steps = _Steps(fail=True)
+    async with _handing_off(handoff_logger, tmp_path, EARLIER, content=FORM, steps=steps) as (session, manager, pending):
+        await _taken_over(session, manager)
+        await session.page.click("#go")
+        await session.page.locator(f"{HOST} .notice", has_text="couldn't be recorded").wait_for(timeout=5_000)
+        await _press(session.page, "Stop the task")
+        outcome = await asyncio.wait_for(pending, timeout=10)
+    assert outcome.unrecorded == ("a click couldn't be recorded (RuntimeError)",)
+
+
+@pytest.mark.anyio
+async def test_the_persons_actions_are_recorded_one_at_a_time_in_order(handoff_logger, tmp_path):
+    steps = _Steps(change_takes_s=0.4)
+    async with _handing_off(handoff_logger, tmp_path, EARLIER, content=FORM, steps=steps) as (session, manager, pending):
+        await _taken_over(session, manager)
+        await session.page.locator("input[name='amount']").fill("50")
+        # Clicking Continue takes the focus off the field, so the browser reports the change
+        # first, as it does for a person; the click arrives while that is still being recorded.
+        await session.page.click("#go")
+        await session.page.wait_for_function("document.title === 'submitted'", timeout=5_000)
+        await _press(session.page, "Hand back")
+        await asyncio.wait_for(pending, timeout=10)
+    assert steps.calls == [("changed", "50"), ("clicked", "Continue")]
+
+
+@pytest.mark.anyio
+async def test_hand_back_waits_for_a_click_still_being_recorded(handoff_logger, tmp_path):
+    steps = _Steps(click_takes_s=0.8)
+    async with _handing_off(handoff_logger, tmp_path, EARLIER, content=FORM, steps=steps) as (session, manager, pending):
+        await _taken_over(session, manager)
+        await session.page.click("#go")
+        await _until(lambda: steps.calls)
+        await _press(session.page, "Hand back")
+        await asyncio.wait_for(pending, timeout=10)
+        # The person clicked before handing back, so their click was finished first.
+        assert steps.finished == ["clicked"]
+        assert await session.page.title() == "submitted"
 
 
 def test_a_handoff_offers_at_least_one_choice_each_once():

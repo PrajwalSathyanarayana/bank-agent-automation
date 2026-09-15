@@ -154,10 +154,16 @@ class BrowserSession:
         self._person_in_control = False
         # Dialogs that opened while a person had control, possibly still open.
         self._left_open: list[Dialog] = []
+        self._dialogs_for_person = 0
 
     @property
     def person_in_control(self) -> bool:
         return self._person_in_control
+
+    @property
+    def dialogs_for_person(self) -> int:
+        """How many dialogs have been left for a person to answer in this session."""
+        return self._dialogs_for_person
 
     def leave_dialogs_to_person(self) -> None:
         """A person has control: from now on every dialog is left open for them to answer."""
@@ -187,6 +193,7 @@ class BrowserSession:
         if not self._person_in_control:
             return False
         self._left_open.append(dialog)
+        self._dialogs_for_person += 1
         return True
 
     async def __aenter__(self) -> "BrowserSession":
