@@ -13,6 +13,7 @@ import asyncio
 import sys
 import urllib.error
 import urllib.request
+from contextlib import AsyncExitStack
 from typing import Optional, Sequence
 
 from src.config.env import env
@@ -20,6 +21,7 @@ from src.config.settings import settings
 from src.discovery.agent import ClaudeModel, DiscoveryRequest, discover
 from src.discovery.artifact_builder import ArtifactContract
 from src.handoff.session_manager import OperatorSetup
+from src.handoff.ws_server import FEED_HOST, FeedUnavailable, HandoffFeed
 from src.observability.logger import RunLogger
 from src.replay.executor import ReplayRequest, replay
 from src.types.artifact_schema import (
@@ -148,11 +150,13 @@ async def _replay(args: argparse.Namespace) -> int:
         return 2
     logger = RunLogger("REPLAY", capability=BILL_PAY)
     request = ReplayRequest(BILL_PAY, {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee})
-    operator = OperatorSetup() if args.operator else None
-    if operator is not None:
-        print("If the run needs a person, the browser window will show a bar asking them to take over.")
-    # A person can only take over a window they can see.
-    result = await replay(request, logger, headless=not (args.headed or args.operator), operator=operator)
+    async with AsyncExitStack() as stack:
+        operator = None
+        if args.operator:
+            operator = OperatorSetup(announcer=await _open_feed(stack))
+            print("If the run needs a person, the browser window will show a bar asking them to take over.")
+        # A person can only take over a window they can see.
+        result = await replay(request, logger, headless=not (args.headed or args.operator), operator=operator)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
     # A known outcome is an answer, not a failure; so is a task a person finished whose receipt
@@ -161,6 +165,18 @@ async def _replay(args: argparse.Namespace) -> int:
     finished = (last_handoff is not None and last_handoff.resolution == HandoffResolution.MANUAL_COMPLETED
                 and result.irreversible_step != "unknown")
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.BUSINESS_OUTCOME) or finished else 1
+
+
+async def _open_feed(stack: AsyncExitStack) -> Optional[HandoffFeed]:
+    # The feed only announces; the bar in the window works without it, so a busy port is
+    # reported and the run goes on.
+    try:
+        feed = await stack.enter_async_context(HandoffFeed(env.ws_handoff_port))
+    except FeedUnavailable as unavailable:
+        print(f"Note: {unavailable}; carrying on without announcements (the bar in the window still works).")
+        return None
+    print(f"Handoff announcements: ws://{FEED_HOST}:{feed.port} (watch them with: python -m src.handoff.watch)")
+    return feed
 
 
 def _bank_is_up() -> bool:

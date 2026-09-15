@@ -12,6 +12,7 @@ from src.config.env import env
 from src.config.settings import settings
 from src.locating.checks import find_phrase, phrase_matches, value_beside
 from src.locating.resolver import resolve
+from src.handoff.ws_server import FeedUnavailable, HandoffFeed
 from src.main import BILL_PAY, CONTRACTS, main, parse_args
 from src.types.result_schema import (
     BusinessOutcome,
@@ -198,6 +199,7 @@ def test_with_an_operator_the_window_is_shown_and_a_finished_task_exits_by_its_r
 ):
     monkeypatch.setattr(settings, "evidence_dir", tmp_path)
     monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
+    monkeypatch.setattr(env, "ws_handoff_port", 0)  # a free port, never a real run's
     asked = []
 
     async def fake_replay(request, logger, *, headless, operator=None):
@@ -210,9 +212,37 @@ def test_with_an_operator_the_window_is_shown_and_a_finished_task_exits_by_its_r
     monkeypatch.setattr(main_module, "replay", fake_replay)
     assert main([*REPLAY_ARGS, "--operator"]) == exit_code
     [(headless, operator)] = asked
-    # A person can only take over a window they can see.
-    assert headless is False and operator is not None
-    assert "take over" in capsys.readouterr().out
+    # A person can only take over a window they can see; the feed announces to anyone watching.
+    assert headless is False and isinstance(operator.announcer, HandoffFeed)
+    out = capsys.readouterr().out
+    assert "take over" in out and "Handoff announcements: ws://127.0.0.1:" in out
+
+
+def test_a_busy_feed_port_is_reported_and_the_run_goes_on_without_it(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
+    monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
+    asked = []
+
+    class _Busy:
+        def __init__(self, port):
+            self.port = port
+
+        async def __aenter__(self):
+            raise FeedUnavailable(f"the handoff feed couldn't listen on port {self.port} (in use)")
+
+        async def __aexit__(self, *exc_info):
+            return None
+
+    async def fake_replay(request, logger, *, headless, operator=None):
+        asked.append(operator)
+        return _result(ExecutionStatus.SUCCESS, logger)
+
+    monkeypatch.setattr(main_module, "HandoffFeed", _Busy)
+    monkeypatch.setattr(main_module, "replay", fake_replay)
+    assert main([*REPLAY_ARGS, "--operator"]) == 0
+    [operator] = asked
+    assert operator is not None and operator.announcer is None
+    assert "carrying on without announcements" in capsys.readouterr().out
 
 
 def test_only_replay_takes_an_operator_for_now():

@@ -4,15 +4,19 @@ value)."""
 import asyncio
 import json
 import re
+import socket
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from websockets.asyncio.client import connect as ws_connect
 
 from src.config.settings import settings
 from src.handoff.control_bar import BINDING, TAKE_OVER, BarContent, Button, remove_bar, show_bar
 from src.handoff.session_manager import Choice, HandoffManager, HandoffRequest
+from src.handoff.watch import describe
+from src.handoff.ws_server import FEED_HOST, FeedUnavailable, HandoffFeed
 from src.observability.logger import RunLogger
 from src.surface.browser import BrowserSession
 from src.types.result_schema import HandoffResolution
@@ -402,3 +406,80 @@ def test_a_handoff_offers_at_least_one_choice_each_once():
     for choices in ((), (Choice.STOP, Choice.STOP)):
         with pytest.raises(ValueError, match="at least one choice"):
             HandoffRequest("STUCK", "stuck", choices)
+
+
+# --- the feed: announcements for anyone not looking at the window ---
+
+REQUESTED = {"event": "HANDOFF_REQUESTED", "run_id": "c61de331-b704", "at": "2026-09-15T04:10:06+00:00",
+             "capability": "member_servicing_and_bill_pay", "goal": GOAL, "step_index": 12,
+             "why": "the amount is above the bank's limit for automatic payments"}
+RESOLVED = {"event": "HANDOFF_RESOLVED", "run_id": "c61de331-b704", "at": "2026-09-15T04:10:31+00:00",
+            "resolution": "MANUAL_COMPLETED", "window_closed": False}
+
+
+async def _received(listener) -> dict:
+    return json.loads(await asyncio.wait_for(listener.recv(), timeout=5))
+
+
+@pytest.mark.anyio
+async def test_every_listener_hears_each_announcement():
+    async with HandoffFeed(0) as feed:
+        url = f"ws://{FEED_HOST}:{feed.port}"
+        async with ws_connect(url) as first, ws_connect(url) as second:
+            await _until(lambda: feed.listening == 2)
+            await feed.announce(REQUESTED)
+            assert [await _received(first), await _received(second)] == [REQUESTED, REQUESTED]
+
+
+@pytest.mark.anyio
+async def test_a_listener_joining_late_is_told_about_the_open_handoff_only():
+    async with HandoffFeed(0) as feed:
+        url = f"ws://{FEED_HOST}:{feed.port}"
+        await feed.announce(REQUESTED)
+        async with ws_connect(url) as late:
+            assert await _received(late) == REQUESTED
+        await feed.announce(RESOLVED)
+        async with ws_connect(url) as after:
+            # Nothing is open any more, so a new listener hears nothing until the next handoff.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(after.recv(), timeout=0.5)
+
+
+@pytest.mark.anyio
+async def test_what_a_listener_sends_is_ignored_and_one_leaving_changes_nothing():
+    async with HandoffFeed(0) as feed:
+        url = f"ws://{FEED_HOST}:{feed.port}"
+        async with ws_connect(url) as meddler:
+            await _until(lambda: feed.listening == 1)
+            await meddler.send(json.dumps({"event": "choice", "choice": "stop"}))
+        await _until(lambda: feed.listening == 0)
+        await feed.announce(REQUESTED)  # nobody listening: no error
+
+
+@pytest.mark.anyio
+async def test_a_busy_port_is_reported_as_the_feed_being_unavailable():
+    with socket.socket() as taken:
+        taken.bind((FEED_HOST, 0))
+        taken.listen()
+        with pytest.raises(FeedUnavailable, match="couldn't listen on port"):
+            async with HandoffFeed(taken.getsockname()[1]):
+                pass
+
+
+@pytest.mark.parametrize(
+    "announcement, line",
+    [
+        pytest.param(REQUESTED, f"[04:10:06] A PERSON IS NEEDED at step 12 (run c61de331): the amount is above the "
+                                f"bank's limit for automatic payments. Task: {GOAL} Take over in the run's browser "
+                                "window.", id="a person is needed"),
+        pytest.param({"event": "HANDOFF_STARTED", "run_id": "c61de331-b704", "at": "2026-09-15T04:10:09+00:00"},
+                     "[04:10:09] Taken over by a person (run c61de331).", id="taken over"),
+        pytest.param(RESOLVED, "[04:10:31] Control is back with the automation (run c61de331): finished by the "
+                               "person.", id="finished"),
+        pytest.param({**RESOLVED, "resolution": "ABORTED", "window_closed": True},
+                     "[04:10:31] Control is back with the automation (run c61de331): stopped: the window was "
+                     "closed.", id="window closed"),
+    ],
+)
+def test_the_watcher_prints_each_announcement_as_a_sentence(announcement, line):
+    assert describe(announcement) == line
