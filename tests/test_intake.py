@@ -7,7 +7,15 @@ import pytest
 
 from src.catalog import BILL_PAY, CHECKING, CONTRACTS, EMAIL, PHONE, SAVINGS
 from src.config.env import env
-from src.intake import NONE_OF_THEM, ClaudeIntakeModel, IntakeAnswer, intake_tools, interpret, task_line
+from src.intake import (
+    INTAKE_PROMPT,
+    NONE_OF_THEM,
+    ClaudeIntakeModel,
+    IntakeAnswer,
+    intake_tools,
+    interpret,
+    task_line,
+)
 
 REQUEST = "For member 10234, pay 50 to Sunbelt Electric Co"
 BILL_PAY_TASK = ("For member <member id>, read the checking balance, pay <amount> to <payee name>, "
@@ -122,7 +130,13 @@ async def test_a_missing_phone_is_asked_for_in_its_own_words():
     answer = await interpret("Change the phone number of member 40412", CONTRACTS,
                              _Scripted((PHONE, {"member_id": "40412", "new_phone": None})))
     assert answer.missing == ("new_phone",)
-    assert "new phone number, as (NNN) NNN-NNNN" in answer.message
+    assert answer.message == ("To do that I also need: new phone number, as (NNN) NNN-NNNN. "
+                              "Please say it in the request.")  # no figures hint: no amount is missing
+
+
+def test_the_model_is_told_to_copy_a_value_as_written_and_leave_the_checking_to_the_bank():
+    # A phone like 520-555-0199 is stated: it goes to the bank, which gives its own answer.
+    assert "Copy a stated value exactly as written even if it looks wrong" in INTAKE_PROMPT
 
 
 @pytest.mark.anyio

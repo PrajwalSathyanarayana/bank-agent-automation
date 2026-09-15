@@ -29,6 +29,7 @@ _JSON_TYPES = {ParamType.STRING: "string", ParamType.NUMBER: "number", ParamType
 
 INTAKE_PROMPT = """You turn a staff member's request into one of the tasks offered as tools, for a credit union's back-office system. Call exactly one tool.
 - Choose the task the request asks for, and fill each input only with a value the request states: numbers as plain numbers (50, 1050.5), names exactly as the request writes them.
+- Copy a stated value exactly as written even if it looks wrong or oddly formatted: the bank checks it and answers for itself.
 - If the request doesn't state a value, set that input to null. Never guess, infer or supply a default.
 - If the request asks for anything other than one of these tasks, or for several tasks at once, call not_a_known_task."""
 
@@ -149,9 +150,12 @@ async def interpret(request: str, contracts: Mapping[str, ArtifactContract], mod
     if missing:
         # Only the first letter lowered: "(NNN) NNN-NNNN" and "ID" keep their case.
         needed = "; ".join(parameter.description[:1].lower() + parameter.description[1:] for parameter in missing)
-        return IntakeAnswer("needs_input", f"To do that I also need: {needed}. Please say it in the request, "
-                            "with any amount written in figures.", capability=capability, inputs=inputs,
-                            missing=tuple(parameter.key for parameter in missing))
+        # The figures hint only when an amount is what's missing: a number is used only if written in figures.
+        figures = any(parameter.type == ParamType.NUMBER for parameter in missing)
+        ask = "Please say it in the request, with any amount written in figures." if figures else (
+            "Please say it in the request.")
+        return IntakeAnswer("needs_input", f"To do that I also need: {needed}. {ask}", capability=capability,
+                            inputs=inputs, missing=tuple(parameter.key for parameter in missing))
     shown, _ = readable_values(inputs, {}, contract.confirmation_checks, contract.output_definitions)
     return IntakeAnswer("run", f"Understood as: {asked_line(capability, contract.description, shown)}",
                         capability=capability, inputs=inputs)
