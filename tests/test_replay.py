@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -267,6 +268,29 @@ async def test_a_declared_outcome_is_recognised_by_its_text(page, dashboard_popu
     assert await outcome_showing(page, BILL.known_outcomes) is None
     await page.goto("/member/99999")
     assert (await outcome_showing(page, BILL.known_outcomes)).code == "MEMBER_NOT_FOUND"
+
+
+@pytest.mark.anyio
+async def test_a_declared_outcome_showing_ends_a_checkpoints_wait_early(page):
+    # The checkpoint itself will never hold once the bank has already answered — waiting out
+    # its full timeout would only slow the result down, not change it.
+    await _set_page(page, "<div>Insufficient funds for this payment amount.</div>")
+    checkpoint = _check(CheckpointType.PAGE_TITLE, "Bill Pay", timeout_ms=5000)
+    started = time.monotonic()
+    failed = await verify_step_checks(page, _checked_step(checkpoint), None, VALUES, BILL.known_outcomes)
+    assert failed == CheckFailed('page title "Bill Pay"', f'page title "{await page.title()}"')
+    assert time.monotonic() - started < 1.0  # far under the 5 s checkpoint timeout
+
+
+@pytest.mark.anyio
+async def test_without_known_outcomes_the_checkpoint_still_waits_out_its_full_timeout(page):
+    # known_outcomes defaults to empty: existing callers that don't pass it keep the old,
+    # slower-but-correct behavior.
+    await _set_page(page, "<div>Insufficient funds for this payment amount.</div>")
+    checkpoint = _check(CheckpointType.PAGE_TITLE, "Bill Pay", timeout_ms=400)
+    started = time.monotonic()
+    await verify_step_checks(page, _checked_step(checkpoint), None, VALUES)
+    assert time.monotonic() - started >= 0.4
 
 
 @pytest.mark.anyio

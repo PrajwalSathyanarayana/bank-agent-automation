@@ -345,7 +345,7 @@ class _Replay:
 
         if step.action == ActionType.ASSERT_TEXT:
             failed = await verify_shown_text(element, step.input_value or "", self._values,
-                                             settings.replay_checkpoint_timeout_ms)
+                                             settings.replay_checkpoint_timeout_ms, self._artifact.known_outcomes)
             if failed is not None:
                 raise _Trouble(failed, "CHECK_FAILED")
             return
@@ -427,7 +427,8 @@ class _Replay:
 
     async def _verify(self, record: _StepRecord, next_step: Optional[Step]) -> None:
         while True:
-            failed = await verify_step_checks(self._page, record.step, next_step, self._values)
+            failed = await verify_step_checks(self._page, record.step, next_step, self._values,
+                                              self._artifact.known_outcomes)
             if failed is None:
                 return
             if failed.next_step and self._handoff is not None:
@@ -527,7 +528,7 @@ class _Replay:
         step = record.step
         await self._clear_interruptions(record)
         by_person = step.action == ActionType.CLICK and await verify_step_checks(
-            self._page, step, next_step, self._values) is None
+            self._page, step, next_step, self._values, self._artifact.known_outcomes) is None
         log = RecoveryAttemptLog(timestamp=datetime.now(timezone.utc), tier=RecoveryTier.TIER_3_HANDOFF,
                                  resolved=by_person, screenshot_path=outcome.back_screenshot,
                                  details="done by a person" if by_person else "handed back; replay did the step again")
@@ -575,7 +576,7 @@ class _Replay:
         steps = self._artifact.steps
         after = steps[index + 1] if index + 1 < len(steps) else None
         self._irreversible_confirmed = await verify_step_checks(
-            self._page, _briefly(steps[index]), after, self._values) is None
+            self._page, _briefly(steps[index]), after, self._values, self._artifact.known_outcomes) is None
 
     def _irreversible_index(self) -> Optional[int]:
         return next((i for i, step in enumerate(self._artifact.steps) if step.safety_tier == SafetyTier.IRREVERSIBLE),
