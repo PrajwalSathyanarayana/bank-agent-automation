@@ -115,6 +115,12 @@ class ExecutionResult(BaseModel):
     artifact_version: Optional[str] = None
     mode: Literal["DISCOVERY", "REPLAY"]
     status: ExecutionStatus
+    # What was asked and what happened, in plain English, for anyone reading the result.
+    summary: Optional[str] = None
+    # Whether the irreversible step (for bill pay, the payment) happened: "unknown" only when
+    # the run stopped after clicking it and couldn't confirm what followed. None when the
+    # capability has no irreversible step, or discovery never met one.
+    irreversible_step: Optional[Literal["not_reached", "completed", "unknown"]] = None
     start_time: datetime
     end_time: datetime
     duration_ms: int = Field(ge=0)

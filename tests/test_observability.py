@@ -1,8 +1,12 @@
 import json
 
+import pytest
+
 from src.config import settings as settings_module
 from src.config.env import env
 from src.observability.logger import RunLogger
+from src.observability.summary import readable_money, summarize
+from src.types.result_schema import BusinessOutcome, ErrorDetail, ExecutionStatus, FailureDetail
 
 
 def _make_logger(tmp_path, monkeypatch, mode="DISCOVERY"):
@@ -178,3 +182,82 @@ def test_recovery_event_handles_optional_fields(tmp_path, monkeypatch):
     lines = _read_lines(logger.log_path)
     assert lines[0]["screenshot_path"] is None
     assert lines[0]["dom_snapshot"] is None
+
+
+# --- the plain-English summary on every result ---
+
+BILL_PAY = "member_servicing_and_bill_pay"
+ASKED = {"member_id": "10234", "payee_name": "Sunbelt Electric Co", "amount": "$50.00"}
+READ = {"checking_balance_before": "$2,450.32", "new_checking_balance": "$2,400.32"}
+ASKED_LINE = "Pay $50.00 to Sunbelt Electric Co for member 10234."
+
+
+def _summary(status, mode="REPLAY", inputs=ASKED, outputs=None, **facts):
+    return summarize(BILL_PAY, mode, status, goal="For member 10234, pay 50 to Sunbelt Electric Co.",
+                     inputs=inputs, outputs=outputs or {}, **facts)
+
+
+@pytest.mark.parametrize(
+    "status, facts, expected",
+    [
+        pytest.param(ExecutionStatus.SUCCESS, {"outputs": READ, "irreversible_step": "completed"},
+                     "Paid $50.00 to Sunbelt Electric Co for member 10234. "
+                     "Checking balance $2,450.32 before, $2,400.32 after.", id="paid"),
+        pytest.param(ExecutionStatus.BUSINESS_OUTCOME,
+                     {"inputs": {**ASKED, "member_id": "99999"}, "irreversible_step": "not_reached",
+                      "outcome": BusinessOutcome(code="MEMBER_NOT_FOUND", description="No member has this ID")},
+                     "Pay $50.00 to Sunbelt Electric Co for member 99999. Not done: no member has this ID. "
+                     "No payment was made.", id="no such member"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED,
+                     {"error": ErrorDetail(code="OVER_AUTO_LIMIT", message="over"), "irreversible_step": "not_reached"},
+                     f"{ASKED_LINE} A person needs to decide: the amount is above the bank's limit for automatic "
+                     "payments. No payment was made.", id="over the limit"),
+        pytest.param(ExecutionStatus.TECHNICAL_FAIL,
+                     {"error": ErrorDetail(code="CHECK_FAILED", message="failed"), "irreversible_step": "unknown",
+                      "failure": FailureDetail(step_index=12, step_description="Submit the payment for final processing.",
+                                               expected="page path /billpay/confirm", observed="page path /login")},
+                     f"{ASKED_LINE} Stopped at step 12 (Submit the payment for final processing): a screen wasn't the "
+                     "one expected (CHECK_FAILED). The payment may have gone through: check before trying again.",
+                     id="stopped after the payment was clicked"),
+        pytest.param(ExecutionStatus.HARD_ABORT, {"error": ErrorDetail(code="NO_ARTIFACT", message="none")},
+                     f"{ASKED_LINE} Stopped: this task hasn't been learned yet (NO_ARTIFACT).", id="not learned yet"),
+        pytest.param(ExecutionStatus.SUCCESS,
+                     {"mode": "DISCOVERY", "outputs": READ, "irreversible_step": "completed", "version": "3.0.0"},
+                     "Paid $50.00 to Sunbelt Electric Co for member 10234. Checking balance $2,450.32 before, "
+                     "$2,400.32 after. Learned and saved as version 3.0.0.", id="learned"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED,
+                     {"mode": "DISCOVERY", "escalation": "IRREVERSIBLE_STEP", "irreversible_step": "not_reached",
+                      "version": "2.0.0"},
+                     f"{ASKED_LINE} A person needs to decide: the task was learned up to the final confirmation, which "
+                     "a person must make. No payment was made. Learned and saved as version 2.0.0.",
+                     id="learned up to the payment"),
+    ],
+)
+def test_a_result_reads_as_plain_english(status, facts, expected):
+    assert _summary(status, **facts) == expected
+
+
+def test_a_request_missing_an_input_is_described_by_its_goal():
+    text = _summary(ExecutionStatus.HARD_ABORT, inputs={"member_id": "10234"},
+                    error=ErrorDetail(code="INPUT_INVALID", message="missing inputs: amount"))
+    assert text == ("Asked: For member 10234, pay 50 to Sunbelt Electric Co. "
+                    "Stopped: the request was incomplete or invalid (INPUT_INVALID).")
+
+
+def test_an_unfamiliar_code_still_reads_as_a_sentence():
+    text = _summary(ExecutionStatus.TECHNICAL_FAIL, error=ErrorDetail(code="SOMETHING_NEW", message="new"))
+    assert text == f"{ASKED_LINE} Stopped: an internal check stopped it (SOMETHING_NEW)."
+
+
+def test_a_capability_without_its_own_wording_is_summarised_from_its_goal():
+    text = summarize("update_contact", "REPLAY", ExecutionStatus.SUCCESS, goal="For member 10234, update the email.",
+                     inputs={"member_id": "10234"}, outputs={"confirmation_number": "88121"})
+    assert text == "Done: For member 10234, update the email. confirmation number: 88121."
+
+
+@pytest.mark.parametrize(
+    "value, currency, shown",
+    [("2450.32", "USD", "$2,450.32"), (50.0, "USD", "$50.00"), ("50", "EUR", "50.00 EUR"), ("n/a", "USD", "n/a")],
+)
+def test_amounts_are_shown_the_way_people_write_them(value, currency, shown):
+    assert readable_money(value, currency) == shown
