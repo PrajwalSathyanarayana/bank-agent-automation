@@ -188,6 +188,29 @@ async def test_text_from_the_run_is_shown_as_text_never_as_markup(page):
 
 
 @pytest.mark.anyio
+async def test_in_a_short_window_the_bar_stays_in_view_and_the_page_moves_below_it(page):
+    # A person's window can show less than the page's full height: the bar is at the top,
+    # its buttons on screen, and the page sits below it until it goes.
+    await page.set_viewport_size({"width": 1024, "height": 560})
+    reports = await _listening(page)
+    await page.set_content(PAGE)
+    before = (await page.locator("#pay").bounding_box())["y"]
+    await show_bar(page, _content())
+    await _take_over(page, reports)
+    bar = await page.locator(f"{HOST} .bar").bounding_box()
+    assert bar["y"] == 0 and bar["height"] < 140
+    for button in await _bar_buttons(page).all():
+        box = await button.bounding_box()
+        assert 0 <= box["y"] and box["y"] + box["height"] <= 560
+    # The page moves once the bar has drawn its new buttons: waited for, not assumed.
+    await page.wait_for_function(
+        "([before, height]) => Math.abs(document.querySelector('#pay').getBoundingClientRect().top"
+        " - (before + height)) <= 1", arg=[before, bar["height"]], timeout=5_000)
+    await remove_bar(page)
+    assert (await page.locator("#pay").bounding_box())["y"] == before
+
+
+@pytest.mark.anyio
 async def test_the_clock_says_when_time_is_up(page):
     await page.set_content(PAGE)
     await show_bar(page, _content(deadline=time.time() - 1))

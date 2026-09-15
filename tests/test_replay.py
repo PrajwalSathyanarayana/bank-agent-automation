@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from flask import request
+from playwright.async_api import Error as PlaywrightError
 
 import blueprints.auth as auth_routes  # the mock bank; tests/conftest.py puts its folder on the import path
 from src.config.env import env
@@ -910,6 +911,21 @@ async def test_a_step_handed_back_undone_is_tried_once_more_then_fails_as_usual(
     assert [h.resolution for h in result.handoff_events] == [HandoffResolution.RESUMED]
     assert "A person had control during the run." in result.summary
     assert result.irreversible_step == "not_reached"
+
+
+@pytest.mark.anyio
+async def test_only_a_visible_replay_fits_its_page_to_the_window(saved_bill_pay, replay_logger, monkeypatch):
+    saved_bill_pay()
+    opened = []
+
+    def no_browser(logger, **options):
+        opened.append(options)
+        raise PlaywrightError("no browser in this test")
+
+    monkeypatch.setattr("src.replay.executor.BrowserSession", no_browser)
+    for headless in (False, True):
+        await replay(ReplayRequest(BILL_PAY, _asked()), replay_logger, headless=headless)
+    assert opened == [{"headless": False, "fit_window": True}, {"headless": True, "fit_window": False}]
 
 
 @pytest.mark.anyio

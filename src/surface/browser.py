@@ -139,9 +139,12 @@ class BrowserSession:
     way out, after an error too.
     """
 
-    def __init__(self, logger: RunLogger, *, headless: bool = True) -> None:
+    def __init__(self, logger: RunLogger, *, headless: bool = True, fit_window: bool = False) -> None:
+        """fit_window: the page is the window, whatever its size (a visible replay a person
+        watches); otherwise one fixed size and scale, which discovery's screenshots need."""
         self._logger = logger
         self._headless = headless
+        self._fit_window = fit_window
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -189,13 +192,20 @@ class BrowserSession:
     async def __aenter__(self) -> "BrowserSession":
         self._playwright = await async_playwright().start()
         try:
-            self._browser = await self._playwright.chromium.launch(
-                headless=self._headless, args=launch_args(env.mock_bank_base_url)
-            )
-            context = await self._browser.new_context(
-                viewport={"width": settings.discovery_viewport_width, "height": settings.discovery_viewport_height},
-                device_scale_factor=settings.discovery_device_scale_factor,
-            )
+            args = launch_args(env.mock_bank_base_url)
+            if self._fit_window and not self._headless:
+                args = [*args, "--start-maximized"]
+            self._browser = await self._playwright.chromium.launch(headless=self._headless, args=args)
+            if self._fit_window:
+                # Nothing is cut off on a smaller screen: the page follows the window, and the
+                # screen's own scaling applies. Never for discovery, whose numbered marks assume
+                # one page pixel per screenshot pixel.
+                context = await self._browser.new_context(no_viewport=True)
+            else:
+                context = await self._browser.new_context(
+                    viewport={"width": settings.discovery_viewport_width, "height": settings.discovery_viewport_height},
+                    device_scale_factor=settings.discovery_device_scale_factor,
+                )
             self.page = await context.new_page()
         except BaseException:
             await self._close()

@@ -6,9 +6,11 @@
 // reading of an element's wording, so the log and the tier describe an element
 // alike. Nothing typed is ever read: a changed field is reported by its label.
 //
-// Until the person presses Take over, a veil covers the page, so every action on
-// it happens with the person in control and is recorded. Text from the run (why,
-// the task, the step) is set as text, never as markup.
+// The bar sits at the top of the window, which is on screen whatever the
+// window's size, and the page moves down by the bar's height so the bar covers
+// nothing. Until the person presses Take over, a veil covers the page, so every
+// action on it happens with the person in control and is recorded. Text from
+// the run (why, the task, the step) is set as text, never as markup.
 (wordingOf, config) => {
   const STATE = "__bankAgentHandoffBar";
   if (window[STATE]) {
@@ -57,33 +59,40 @@
       [hidden] { display: none !important; }
       .veil { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35); pointer-events: auto; }
       .bar {
-        position: absolute; left: 0; right: 0; bottom: 0; pointer-events: auto;
-        background: #12325a; color: #ffffff; font: 14px/1.4 Arial, Helvetica, sans-serif;
-        padding: 10px 16px; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.4);
+        position: absolute; left: 0; right: 0; top: 0; pointer-events: auto;
+        background: #12325a; color: #ffffff; font: 13px/1.35 Arial, Helvetica, sans-serif;
+        padding: 6px 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
       }
-      .title { font-weight: bold; font-size: 15px; }
-      .context { margin: 4px 0; padding-left: 18px; }
-      .status { margin-top: 6px; }
-      .buttons { margin: 6px 0; }
+      .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+      .headline { flex: 1 1 320px; }
+      .title { font-weight: bold; }
+      .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
       button {
-        font: bold 14px Arial, Helvetica, sans-serif; margin-right: 8px; padding: 6px 14px;
+        font: bold 13px Arial, Helvetica, sans-serif; margin: 0; padding: 5px 12px;
         background: #ffffff; color: #12325a; border: 0; border-radius: 3px; cursor: pointer;
       }
       button:disabled { opacity: 0.5; cursor: default; }
-      .hint, .clock { font-size: 12px; color: #d6e2f0; }
+      .meta, .context { display: flex; flex-wrap: wrap; gap: 2px 16px; }
+      .meta { margin-top: 3px; font-size: 12px; color: #d6e2f0; }
+      .context { margin: 0; padding: 0; list-style: none; }
+      .hint { margin-top: 2px; font-size: 12px; color: #ffd27f; }
     </style>
     <div class="veil"></div>
     <div class="bar" role="region" aria-label="Operator controls">
-      <div class="title"></div>
-      <div class="why"></div>
-      <ul class="context"></ul>
-      <div class="status"></div>
-      <div class="buttons"></div>
+      <div class="row">
+        <div class="headline"><span class="title"></span>: <span class="why"></span></div>
+        <div class="buttons"></div>
+      </div>
+      <div class="meta">
+        <span class="status"></span>
+        <ul class="context"></ul>
+        <span class="clock"></span>
+      </div>
       <div class="hint"></div>
-      <div class="clock"></div>
     </div>`;
   const part = (name) => root.querySelector(`.${name}`);
   const veil = part("veil");
+  const bar = part("bar");
   const status = part("status");
   const buttonsBox = part("buttons");
   const hint = part("hint");
@@ -122,11 +131,12 @@
   function render() {
     veil.hidden = takenOver;
     status.textContent = takenOver
-      ? "You are in control of this page. When you're done, choose:"
+      ? "You are in control of this page. When you're done, choose above."
       : "The page is paused. Press Take over to use it.";
     hint.textContent = takenOver
       ? "If the bank shows a pop-up box, answer it first: these buttons don't respond while it is open."
       : "";
+    hint.hidden = !takenOver;
     const offered = takenOver ? config.buttons : [config.takeOver];
     buttonsBox.replaceChildren(...offered.map(makeButton));
   }
@@ -138,6 +148,17 @@
         ? `Time left: ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`
         : "Time is up: the task will stop.";
   }
+
+  // The page moves down by the bar's height, and back when the bar goes, so the
+  // bar never covers anything the person needs.
+  const body = document.body || document.documentElement;
+  const inlinePadding = body.style.paddingTop;
+  const basePadding = parseFloat(getComputedStyle(body).paddingTop) || 0;
+  function makeRoom() {
+    body.style.paddingTop = `${basePadding + bar.getBoundingClientRect().height}px`;
+  }
+  // The bar's height changes when the buttons change or the window narrows.
+  const resized = new ResizeObserver(makeRoom);
 
   // ---------------------------------------------------------------------------
   // What the person does
@@ -239,10 +260,14 @@
       window.removeEventListener("click", onClick, true);
       window.removeEventListener("change", onChange, true);
       clearInterval(timer);
+      resized.disconnect();
       host.remove();
+      body.style.paddingTop = inlinePadding;
       delete window[STATE];
     },
   };
-  (document.body || document.documentElement).appendChild(host);
+  document.documentElement.appendChild(host);
   render();
+  resized.observe(bar);
+  makeRoom();
 }

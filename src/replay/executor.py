@@ -176,7 +176,8 @@ class _Replay:
         if refused is not None:
             return self._end(ExecutionStatus.HARD_ABORT, error=refused)
         try:
-            async with BrowserSession(self._logger, headless=self._headless) as session:
+            # A visible run is watched by a person, so its page follows their window.
+            async with BrowserSession(self._logger, headless=self._headless, fit_window=not self._headless) as session:
                 self._session = session
                 if self._operator is not None:
                     self._handoff = HandoffManager(

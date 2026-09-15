@@ -2533,6 +2533,15 @@ async def test_a_dialog_the_person_already_answered_is_left_as_they_answered_it(
 
 
 @pytest.mark.anyio
+async def test_a_session_fitted_to_its_window_has_no_fixed_page_size(mock_bank_url, run_logger):
+    # For a visible replay a person watches; discovery always keeps the fixed size.
+    async with BrowserSession(run_logger, fit_window=True) as session:
+        await session.open(f"{mock_bank_url}/login", timeout_ms=10_000)
+        assert session.page.viewport_size is None
+        assert await session.page.evaluate("window.innerWidth") > 0
+
+
+@pytest.mark.anyio
 async def test_the_session_opens_an_allowed_start_page_and_refuses_another(mock_bank_url, run_logger):
     async with BrowserSession(run_logger) as session:
         await session.open(f"{mock_bank_url}/login", timeout_ms=10_000)
