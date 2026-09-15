@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from src.config.settings import settings
+from src.evidence.index import RunEntry, discover_runs, main, render_index_html, render_index_markdown, write_index
 from src.evidence.report import render_report, write_report
 from src.types.result_schema import (
     BusinessOutcome,
@@ -150,3 +152,99 @@ def test_the_reports_links_point_at_the_runs_own_result_and_log(tmp_path):
     html = render_report(_result(ExecutionStatus.SUCCESS), tmp_path)
     assert 'href="result.json"' in html
     assert 'href="log.json"' in html
+
+
+# --- the front page: evidence/index.html and index.md ---
+
+def _write_result(folder, result) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "result.json").write_text(result.to_json(), encoding="utf-8")
+
+
+def test_discover_runs_finds_every_folder_with_a_result_json(tmp_path):
+    runs = tmp_path / "runs"
+    _write_result(runs / "a", _result(ExecutionStatus.SUCCESS))
+    _write_result(runs / "b", _result(ExecutionStatus.SUCCESS))
+    (runs / "still_going").mkdir()  # no result.json yet: a run in progress
+    entries = discover_runs(runs)
+    assert {entry.folder for entry in entries} == {"runs/a", "runs/b"}
+
+
+def test_discover_runs_on_a_missing_folder_is_empty_not_an_error(tmp_path):
+    assert discover_runs(tmp_path / "nope") == []
+
+
+def test_an_unreadable_result_json_is_skipped_not_fatal_to_the_rest(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    broken = runs / "broken"
+    broken.mkdir(parents=True)
+    (broken / "result.json").write_text("not json", encoding="utf-8")
+    _write_result(runs / "readable", _result(ExecutionStatus.SUCCESS))
+    entries = discover_runs(runs)
+    assert [entry.folder for entry in entries] == ["runs/readable"]
+    assert "broken" in capsys.readouterr().err
+
+
+def test_runs_are_listed_newest_first(tmp_path):
+    runs = tmp_path / "runs"
+    _write_result(runs / "older", _result(ExecutionStatus.SUCCESS, start_time=NOW.replace(hour=1)))
+    _write_result(runs / "newer", _result(ExecutionStatus.SUCCESS, start_time=NOW.replace(hour=5)))
+    entries = discover_runs(runs)
+    assert [entry.folder for entry in entries] == ["runs/newer", "runs/older"]
+
+
+def test_write_index_renders_every_listed_runs_report(tmp_path):
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS))
+    write_index(tmp_path)
+    assert (tmp_path / "runs" / "a" / "report.html").exists()
+
+
+def test_write_index_writes_both_the_html_and_markdown_front_pages(tmp_path):
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS))
+    html_path, md_path = write_index(tmp_path)
+    assert (html_path, md_path) == (tmp_path / "index.html", tmp_path / "index.md")
+    assert html_path.exists() and md_path.exists()
+
+
+def test_the_front_page_links_to_each_runs_own_report(tmp_path):
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS))
+    html_path, _ = write_index(tmp_path)
+    assert 'href="runs/a/report.html"' in html_path.read_text(encoding="utf-8")
+
+
+def test_an_empty_run_list_says_so_plainly_in_html(tmp_path):
+    assert "No runs yet." in render_index_html([])
+
+
+def test_the_markdown_table_names_the_run_by_its_short_id_and_links_its_report():
+    result = _result(ExecutionStatus.SUCCESS, run_id="deadbeef-0000-0000-0000-000000000000")
+    md = render_index_markdown([RunEntry(result, "runs/a")])
+    assert "| Member Servicing And Bill Pay | Replay |" in md
+    assert "[deadbeef](runs/a/report.html)" in md
+
+
+def test_a_pipe_in_the_summary_is_escaped_in_the_markdown_table():
+    result = _result(ExecutionStatus.SUCCESS, summary="Paid $50 | done")
+    md = render_index_markdown([RunEntry(result, "runs/a")])
+    assert "Paid $50 \\| done" in md
+
+
+def test_an_empty_run_list_is_still_a_valid_markdown_table():
+    md = render_index_markdown([])
+    assert md.startswith("| Capability |")
+    assert "\n|---|" in md
+
+
+def test_main_writes_the_index_to_the_folder_it_is_given(tmp_path, capsys):
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS))
+    assert main([str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert str(tmp_path / "index.html") in out
+    assert (tmp_path / "index.html").exists()
+
+
+def test_main_defaults_to_the_configured_evidence_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS))
+    assert main([]) == 0
+    assert (tmp_path / "index.html").exists()

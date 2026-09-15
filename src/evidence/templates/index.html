@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Evidence</title>
+<style>
+  :root {
+    --ok: #1a7f37; --ok-bg: #dafbe1;
+    --answer: #0969da; --answer-bg: #ddf4ff;
+    --person: #9a6700; --person-bg: #fff8c5;
+    --fail: #cf222e; --fail-bg: #ffebe9;
+    --ink: #1f2328; --muted: #59636e; --line: #d1d9e0; --panel: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px; background: #fff; color: var(--ink);
+    font: 15px/1.5 -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  tr:hover td { background: var(--panel); }
+  a { color: var(--answer); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.answer { background: var(--answer-bg); color: var(--answer); }
+  .badge.person { background: var(--person-bg); color: var(--person); }
+  .badge.fail { background: var(--fail-bg); color: var(--fail); }
+  .empty { color: var(--muted); font-style: italic; padding: 24px 0; }
+  .summary-cell { max-width: 360px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Evidence</h1>
+  <p class="sub">{{ rows | length }} run{{ "" if rows | length == 1 else "s" }}</p>
+  {% if rows %}
+  <table>
+    <tr><th>Capability</th><th>Mode</th><th>Status</th><th>Summary</th><th>Started</th><th>Duration</th></tr>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{{ row.report_link }}">{{ row.capability }}</a></td>
+      <td>{{ row.mode }}</td>
+      <td><span class="badge {{ row.status_class }}">{{ row.status_label }}</span></td>
+      <td class="summary-cell">{{ row.summary }}</td>
+      <td>{{ row.started }}</td>
+      <td>{{ row.duration }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No runs yet.</p>
+  {% endif %}
+</main>
+</body>
+</html>
