@@ -104,10 +104,19 @@ class RunLogger:
         tier: str,
         screenshot_path: Optional[str] = None,
         dom_snapshot: Optional[str] = None,
+        *,
+        interruption_code: Optional[str] = None,
+        recovery: Optional[str] = None,
+        resolved: Optional[bool] = None,
+        details: Optional[str] = None,
     ) -> None:
+        """Replay met a known interruption: which one, the recovery tried, whether it worked
+        and why not, and the screenshot taken before it."""
         self._emit(
             "RECOVERY_EVENT",
-            {"tier": tier, "screenshot_path": screenshot_path, "dom_snapshot": dom_snapshot},
+            {"tier": tier, "screenshot_path": screenshot_path, "dom_snapshot": dom_snapshot,
+             "interruption_code": interruption_code, "recovery": recovery, "resolved": resolved,
+             "details": details},
         )
 
     def handoff_started(self, trigger_reason: str, session_lock_token: str) -> None:

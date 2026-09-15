@@ -1,13 +1,26 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from src.config.env import env
 from src.config.settings import settings
+from src.main import BILL_PAY, CONTRACTS
 from src.observability.logger import RunLogger
 from src.replay.checks import CheckFailed, CheckValues, verify_shown_text, verify_step_checks
 from src.replay.locator_resolver import Found, NotFound, find_element
-from src.types.step_schema import ActionType, CheckpointType, Locator, LocatorType, RetryBudget, Step, StepCheckpoint
+from src.replay.recovery_engine import Recoveries, interruption_showing, missing_option, outcome_showing, recover
+from src.types.result_schema import RecoveryTier
+from src.types.step_schema import (
+    ActionType,
+    CheckpointType,
+    Locator,
+    LocatorType,
+    RetryBudget,
+    SafetyTier,
+    Step,
+    StepCheckpoint,
+)
 
 QUIRKS_DOCTYPE = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">'
 
@@ -219,3 +232,114 @@ async def test_element_checks_hold_only_for_what_they_name(page, checkpoint, hol
                           "<input name='amount' value='1050'>")
     failed = await verify_step_checks(page, _checked_step(checkpoint), None, VALUES)
     assert (failed is None) is holds
+
+
+# --- known outcomes and interruptions, with bill pay's own declarations ---
+
+BILL = CONTRACTS[BILL_PAY]
+POPUP, EXPIRED = BILL.known_interruptions
+RUN = CheckValues(text={"member_id": "10234", "payee_name": "Sunbelt Electric Co"}, numbers={"amount": 50.0})
+
+
+async def _recover(page, interruption, logger, recoveries=None, irreversible_done=False):
+    return await recover(page, interruption, RUN, BILL.allowed_paths, logger, recoveries or Recoveries(),
+                         irreversible_done=irreversible_done)
+
+
+@pytest.mark.anyio
+async def test_a_declared_outcome_is_recognised_by_its_text(page, dashboard_popup):
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/10234")
+    assert await outcome_showing(page, BILL.known_outcomes) is None
+    await page.goto("/member/99999")
+    assert (await outcome_showing(page, BILL.known_outcomes)).code == "MEMBER_NOT_FOUND"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("payee, code", [pytest.param("Sunbelt Electric Co", None, id="offered"),
+                                         pytest.param("Acme Gas", "PAYEE_NOT_FOUND", id="not offered")])
+async def test_a_payee_the_dropdown_doesnt_offer_is_the_declared_outcome(page, dashboard_popup, payee, code):
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/10234")
+    await page.goto("/billpay")
+    step = Step(sequence_index=9, action=ActionType.SELECT, description="Choose the payee",
+                input_value="{payee_name}", locators=[_css("select[name='payee_id']")])
+    found = await missing_option(step, page.locator("select[name='payee_id']"), BILL.known_outcomes,
+                                 CheckValues(text={"payee_name": payee}, numbers={}))
+    assert (found.code if found else None) == code
+
+
+@pytest.mark.anyio
+async def test_the_declared_interruptions_are_recognised_on_the_real_pages(page, dashboard_popup):
+    dashboard_popup(True)
+    await _sign_in(page)
+    assert (await interruption_showing(page, BILL.known_interruptions, RUN)).code == "PROMO_POPUP"
+    await page.context.clear_cookies()
+    await page.goto("/dashboard")  # the session is gone: the bank shows its timeout page
+    assert (await interruption_showing(page, BILL.known_interruptions, RUN)).code == "SESSION_EXPIRED"
+
+
+@pytest.mark.anyio
+async def test_a_clear_page_has_no_interruption(page, dashboard_popup):
+    dashboard_popup(False)
+    await _sign_in(page)
+    assert await interruption_showing(page, BILL.known_interruptions, RUN) is None
+
+
+@pytest.mark.anyio
+async def test_the_popup_is_cleared_by_its_declared_click_and_logged(page, dashboard_popup, replay_logger):
+    dashboard_popup(True)
+    await _sign_in(page)
+    recovery = await _recover(page, POPUP, replay_logger)
+    log = recovery.log
+    assert (log.resolved, log.interruption_code, log.tier, recovery.start_over) == (
+        True, "PROMO_POPUP", RecoveryTier.TIER_1_RULE, False)
+    assert await interruption_showing(page, BILL.known_interruptions, RUN) is None
+    assert Path(log.screenshot_path).exists()
+    [event] = [line for line in _log_lines(replay_logger) if line["event_type"] == "RECOVERY_EVENT"]
+    assert (event["interruption_code"], event["recovery"], event["resolved"]) == ("PROMO_POPUP", "click", True)
+
+
+@pytest.mark.anyio
+async def test_a_clearing_click_that_isnt_safe_is_refused_and_nothing_is_clicked(
+    page, dashboard_popup, replay_logger, monkeypatch
+):
+    dashboard_popup(True)
+    await _sign_in(page)
+    monkeypatch.setattr("src.replay.recovery_engine.classify", lambda *args, **kwargs: SafetyTier.RISKY)
+    recovery = await _recover(page, POPUP, replay_logger)
+    assert recovery.log.resolved is False
+    assert "only a SAFE click clears an interruption" in recovery.log.details
+    assert (await interruption_showing(page, BILL.known_interruptions, RUN)).code == "PROMO_POPUP"
+
+
+@pytest.mark.anyio
+async def test_an_expired_session_asks_the_run_to_start_over(page, replay_logger):
+    await page.goto("/dashboard")  # signed out: the session-timeout page
+    recovery = await _recover(page, EXPIRED, replay_logger)
+    assert (recovery.start_over, recovery.log.resolved) == (True, True)
+
+
+@pytest.mark.anyio
+async def test_a_refused_recovery_does_nothing_and_says_why(page, replay_logger):
+    await page.goto("/dashboard")
+    recovery = await _recover(page, EXPIRED, replay_logger, irreversible_done=True)
+    assert (recovery.start_over, recovery.log.resolved) == (False, False)
+    assert "could repeat it" in recovery.log.details
+
+
+def test_the_same_interruption_is_recovered_at_most_twice_per_run():
+    recoveries = Recoveries()
+    for _ in range(2):
+        assert recoveries.refusal(POPUP, irreversible_done=False) is None
+        recoveries.note(POPUP)
+    assert recoveries.refusal(POPUP, irreversible_done=False) == "PROMO_POPUP came back after 2 recoveries"
+
+
+def test_starting_over_happens_once_and_never_after_the_irreversible_step():
+    assert "could repeat it" in Recoveries().refusal(EXPIRED, irreversible_done=True)
+    recoveries = Recoveries()
+    recoveries.note(EXPIRED)
+    assert recoveries.refusal(EXPIRED, irreversible_done=False) == "the run already started over once"
