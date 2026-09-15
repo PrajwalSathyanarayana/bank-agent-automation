@@ -1,16 +1,26 @@
 import html
 import re
+from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlparse
 
 import pytest
 
+import src.main as main_module
 from app import create_app  # the mock bank; tests/conftest.py puts its folder on the import path
 from src.config.env import env
 from src.config.settings import settings
 from src.locating.checks import find_phrase, phrase_matches, value_beside
 from src.locating.resolver import resolve
-from src.main import BILL_PAY, CONTRACTS, parse_args
+from src.main import BILL_PAY, CONTRACTS, main, parse_args
+from src.types.result_schema import (
+    BusinessOutcome,
+    ErrorDetail,
+    EvidencePaths,
+    ExecutionResult,
+    ExecutionStatus,
+    HandoffTelemetry,
+)
 from src.safety.authorization import authorize
 from src.types.artifact_schema import CompareAs, OutcomeSignal, OutputType, RecoveryAction
 from src.types.routes import route_allowed
@@ -116,6 +126,69 @@ def test_the_discover_command_reads_typed_inputs_a_step_limit_and_a_window_optio
 def test_the_step_limit_defaults_to_the_setting_and_the_window_stays_hidden():
     args = parse_args(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"])
     assert (args.max_steps, args.headed) == (None, False)
+
+
+# --- the replay command ---
+
+REPLAY_ARGS = ["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"]
+
+
+def test_the_replay_command_reads_the_same_typed_inputs_and_a_window_option():
+    args = parse_args(["replay", "--member-id", "40412", "--amount", "25.5", "--payee", "Desert Valley Water Utility",
+                       "--headed"])
+    assert (args.command, args.member_id, args.amount, args.payee, args.headed) == (
+        "replay", "40412", 25.5, "Desert Valley Water Utility", True)
+
+
+def test_the_replay_command_has_no_step_limit_since_no_model_takes_steps():
+    assert not hasattr(parse_args(REPLAY_ARGS), "max_steps")
+
+
+def _result(status: ExecutionStatus, logger) -> ExecutionResult:
+    # The smallest result each status allows.
+    now = datetime.now(timezone.utc)
+    carries = {
+        ExecutionStatus.BUSINESS_OUTCOME: {"outcome": BusinessOutcome(code="MEMBER_NOT_FOUND", description="No member")},
+        ExecutionStatus.HUMAN_ESCALATED: {"handoff_events": [HandoffTelemetry(triggered_timestamp=now,
+                                                                              trigger_reason="OVER_AUTO_LIMIT")]},
+        ExecutionStatus.TECHNICAL_FAIL: {"error": ErrorDetail(code="CHECK_FAILED", message="a check failed")},
+    }.get(status, {})
+    return ExecutionResult(capability=BILL_PAY, mode="REPLAY", status=status, start_time=now, end_time=now,
+                           duration_ms=0, evidence_paths=EvidencePaths(log_file=str(logger.log_path),
+                                                                       screenshots_dir="screenshots"), **carries)
+
+
+@pytest.mark.parametrize(
+    "status, exit_code",
+    [
+        pytest.param(ExecutionStatus.SUCCESS, 0, id="success"),
+        pytest.param(ExecutionStatus.BUSINESS_OUTCOME, 0, id="an answer, not a failure"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED, 1, id="a person is needed"),
+        pytest.param(ExecutionStatus.TECHNICAL_FAIL, 1, id="a failure"),
+    ],
+)
+def test_the_replay_command_asks_for_bill_pay_and_exits_by_status(monkeypatch, capsys, tmp_path, status, exit_code):
+    # The replay itself is covered in test_replay.py; here only what the command asks and reports.
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
+    monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
+    asked = []
+
+    async def fake_replay(request, logger, *, headless):
+        asked.append((request, headless))
+        return _result(status, logger)
+
+    monkeypatch.setattr(main_module, "replay", fake_replay)
+    assert main(REPLAY_ARGS) == exit_code
+    [(request, headless)] = asked
+    assert (request.capability, dict(request.inputs), headless) == (
+        BILL_PAY, {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}, True)
+    assert f'"status": "{status.value}"' in capsys.readouterr().out
+
+
+def test_the_replay_command_says_when_the_bank_isnt_running(monkeypatch, capsys):
+    monkeypatch.setattr(main_module, "_bank_is_up", lambda: False)
+    assert main(REPLAY_ARGS) == 2
+    assert "isn't answering" in capsys.readouterr().out
 
 
 # --- the bill pay interruptions and payment checks, tried on the real pages ---

@@ -1,10 +1,11 @@
-"""Command-line entry point.
+"""Command-line entry point. The mock bank must already be running (python mock_bank/app.py).
 
     python -m src.main discover --member-id 10234 --amount 50 --payee "Sunbelt Electric Co"
+    python -m src.main replay   --member-id 10234 --amount 50 --payee "Sunbelt Electric Co"
 
-Runs one real discovery against the mock bank, which must already be running
-(python mock_bank/app.py). It calls the Claude API, which costs money. Choosing between
-discovery and replay for a capability comes with replay.
+discover runs one real discovery of the bill pay capability; it calls the Claude API,
+which costs money. replay runs the capability's latest trusted artifact with no model at
+all. Choosing between them by itself, from a goal sentence, comes with the router.
 """
 import argparse
 import asyncio
@@ -18,6 +19,7 @@ from src.config.settings import settings
 from src.discovery.agent import ClaudeModel, DiscoveryRequest, discover
 from src.discovery.artifact_builder import ArtifactContract
 from src.observability.logger import RunLogger
+from src.replay.executor import ReplayRequest, replay
 from src.types.artifact_schema import (
     CompareAs,
     ConfirmationCheck,
@@ -101,18 +103,25 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m src.main")
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("discover", help="discover the bill pay capability with the real model (costs money)")
-    run.add_argument("--member-id", required=True)
-    run.add_argument("--amount", required=True, type=float)
-    run.add_argument("--payee", required=True, help='the payee as named on the page, e.g. "Sunbelt Electric Co"')
+    _bill_pay_inputs(run)
     run.add_argument("--max-steps", type=int, default=None,
                      help=f"a lower step limit for this run (default {settings.discovery_max_steps})")
-    run.add_argument("--headed", action="store_true", help="show the browser window")
+    again = commands.add_parser("replay", help="replay the bill pay capability's latest trusted artifact (no model)")
+    _bill_pay_inputs(again)
     return parser.parse_args(argv)
+
+
+def _bill_pay_inputs(command: argparse.ArgumentParser) -> None:
+    # The same typed inputs for both commands, so a replay is asked exactly as a discovery was.
+    command.add_argument("--member-id", required=True)
+    command.add_argument("--amount", required=True, type=float)
+    command.add_argument("--payee", required=True, help='the payee as named on the page, e.g. "Sunbelt Electric Co"')
+    command.add_argument("--headed", action="store_true", help="show the browser window")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    return asyncio.run(_discover(args))
+    return asyncio.run(_replay(args) if args.command == "replay" else _discover(args))
 
 
 async def _discover(args: argparse.Namespace) -> int:
@@ -127,6 +136,19 @@ async def _discover(args: argparse.Namespace) -> int:
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.HUMAN_ESCALATED) else 1
+
+
+async def _replay(args: argparse.Namespace) -> int:
+    if not _bank_is_up():
+        print(f"The mock bank isn't answering at {env.mock_bank_base_url}; start it with: python mock_bank/app.py")
+        return 2
+    logger = RunLogger("REPLAY", capability=BILL_PAY)
+    request = ReplayRequest(BILL_PAY, {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee})
+    result = await replay(request, logger, headless=not args.headed)
+    print(result.to_json())
+    print(f"Run log: {logger.log_path}")
+    # A known outcome is an answer, not a failure; anything else needs someone's attention.
+    return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.BUSINESS_OUTCOME) else 1
 
 
 def _bank_is_up() -> bool:
