@@ -327,6 +327,22 @@ def test_a_persons_part_in_the_run_reads_as_plain_english(status, facts, expecte
     assert _summary(status, **facts) == expected
 
 
+@pytest.mark.parametrize(
+    "capability, inputs, outputs, expected",
+    [
+        pytest.param("look_up_checking_balance", {"member_id": "10234"}, {"checking_balance": "$2,450.32"},
+                     "Checking balance for member 10234: $2,450.32. Learned and saved as version 1.0.0.",
+                     id="a balance lookup names its value once"),
+        pytest.param("update_member_phone", {"member_id": "10234", "new_phone": "(520) 555-0199"}, {},
+                     "Changed the phone number of member 10234 to (520) 555-0199. Learned and saved as version 1.0.0.",
+                     id="a change with nothing to read"),
+    ],
+)
+def test_a_task_with_its_own_wording_isnt_followed_by_a_list_of_its_values(capability, inputs, outputs, expected):
+    assert summarize(capability, "DISCOVERY", ExecutionStatus.SUCCESS, goal="", inputs=inputs, outputs=outputs,
+                     version="1.0.0") == expected
+
+
 def test_a_request_missing_an_input_is_described_by_its_goal():
     text = _summary(ExecutionStatus.HARD_ABORT, inputs={"member_id": "10234"},
                     error=ErrorDetail(code="INPUT_INVALID", message="missing inputs: amount"))

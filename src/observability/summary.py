@@ -145,7 +145,12 @@ def summarize(
     values = {**inputs, **outputs}
     asked = asked_line(capability, goal, values)
     done = _fill(wording.done if wording else "", values) or f"Done: {goal}"
-    results = _fill(wording.results if wording else "", values) or _listed(outputs)
+    # A task's own wording already names what it read ("Checking balance for member …: $…"),
+    # so a separate list is only for a task without wording, or wording that couldn't be filled.
+    if wording is not None and not wording.results:
+        results = ""
+    else:
+        results = _fill(wording.results if wording else "", values) or _listed(outputs)
     reason = escalation or (error.code if error else "")
     parts: list[str] = []
     if status == ExecutionStatus.SUCCESS:
