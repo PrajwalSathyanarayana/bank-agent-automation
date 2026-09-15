@@ -14,7 +14,7 @@ def test_env_loads_all_required_fields():
     assert env.mock_bank_secret_key.get_secret_value()
     assert env.mock_bank_username
     assert env.mock_bank_password.get_secret_value()
-    assert env.artifact_signing_key.get_secret_value()
+    assert env.artifact_private_key_path and env.artifact_trusted_keys_dir
     assert env.ws_handoff_port
     assert env.artifact_storage_dir
     assert env.evidence_dir
@@ -36,6 +36,14 @@ def test_env_missing_required_var_raises_clear_error():
 def test_settings_resolves_absolute_paths():
     assert settings.artifact_storage_dir.is_absolute()
     assert settings.evidence_dir.is_absolute()
+    assert settings.artifact_private_key_path.is_absolute()
+    assert settings.artifact_trusted_keys_dir.is_absolute()
+
+
+def test_the_private_key_lives_outside_the_committed_keys_by_default():
+    configured = Env(_env_file="nonexistent.env", **REQUIRED)
+    assert (configured.artifact_private_key_path, configured.artifact_trusted_keys_dir) == (
+        "./secrets/artifact_signing_key.pem", "./keys/trusted")
 
 
 def test_settings_computed_urls_match_base_url():
@@ -76,12 +84,18 @@ def test_secrets_are_masked_when_printed():
         env.anthropic_api_key,
         env.mock_bank_secret_key,
         env.mock_bank_password,
-        env.artifact_signing_key,
     ):
         assert str(secret) == "**********"
     printed = repr(env)
     assert env.mock_bank_password.get_secret_value() not in printed
-    assert env.artifact_signing_key.get_secret_value() not in printed
+
+
+def test_the_old_signing_key_is_optional_and_masked_when_set():
+    assert Env(_env_file="nonexistent.env", **REQUIRED).artifact_signing_key is None
+    old_key = "k" * 32
+    configured = Env(_env_file="nonexistent.env", **REQUIRED, artifact_signing_key=old_key)
+    assert str(configured.artifact_signing_key) == "**********"
+    assert old_key not in repr(configured)
 
 
 def test_username_is_plain_config_not_a_secret():
@@ -89,7 +103,7 @@ def test_username_is_plain_config_not_a_secret():
 
 
 REQUIRED = {"anthropic_api_key": "x", "anthropic_model": "m", "mock_bank_secret_key": "x",
-            "mock_bank_username": "u", "mock_bank_password": "p", "artifact_signing_key": "k" * 32}
+            "mock_bank_username": "u", "mock_bank_password": "p"}
 
 
 def test_the_auto_pay_limit_defaults_to_a_thousand_dollars_held_exactly():
@@ -118,15 +132,7 @@ def test_the_mock_bank_test_switches_are_off_unless_set():
     assert (configured.mock_bank_renamed_menu, configured.mock_bank_slow_pages_ms) == (False, 0)
 
 
-def test_short_signing_key_is_rejected():
+def test_short_old_signing_key_is_rejected():
     with pytest.raises(ValidationError) as exc_info:
-        Env(
-            _env_file="nonexistent.env",
-            anthropic_api_key="x",
-            anthropic_model="m",
-            mock_bank_secret_key="x",
-            mock_bank_username="u",
-            mock_bank_password="p",
-            artifact_signing_key="too-short",
-        )
+        Env(_env_file="nonexistent.env", **REQUIRED, artifact_signing_key="too-short")
     assert any(e["loc"] == ("artifact_signing_key",) for e in exc_info.value.errors())

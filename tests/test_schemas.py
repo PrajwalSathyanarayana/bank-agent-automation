@@ -79,7 +79,7 @@ def _valid_metadata(description: str = "Read the member's savings balance.") -> 
         capability="member-lookup",
         description=description,
         version="1.0.0",
-        integrity_hash="a" * 64,
+        integrity_hash="a" * 128,
         target_url="http://localhost:5000/search",
         created_timestamp=now,
         last_updated_timestamp=now,
@@ -293,7 +293,7 @@ def test_artifact_metadata_rejects_bad_semver():
             capability="member-lookup",
             description="For member {member_id}, read the savings balance.",
             version="v1",
-            integrity_hash="a" * 64,
+            integrity_hash="a" * 128,
             target_url="http://localhost:5000/search",
             created_timestamp=now,
             last_updated_timestamp=now,
@@ -301,14 +301,19 @@ def test_artifact_metadata_rejects_bad_semver():
     assert [e["loc"] for e in exc_info.value.errors()] == [("version",)]
 
 
-def test_artifact_metadata_rejects_bad_integrity_hash():
+@pytest.mark.parametrize(
+    "signature",
+    [pytest.param("not-a-hash", id="not hex"),
+     pytest.param("a" * 64, id="the length of the old keyed hash, not a signature")],
+)
+def test_artifact_metadata_rejects_bad_integrity_hash(signature):
     now = datetime.now(timezone.utc)
     with pytest.raises(ValidationError) as exc_info:
         ArtifactMetadata(
             capability="member-lookup",
             description="For member {member_id}, read the savings balance.",
             version="1.0.0",
-            integrity_hash="not-a-hash",
+            integrity_hash=signature,
             target_url="http://localhost:5000/search",
             created_timestamp=now,
             last_updated_timestamp=now,
@@ -1051,7 +1056,7 @@ def test_metadata_requires_a_description():
         ArtifactMetadata(
             capability="member-lookup",
             version="1.0.0",
-            integrity_hash="a" * 64,
+            integrity_hash="a" * 128,
             target_url="http://localhost:5000/login",
             created_timestamp=now,
             last_updated_timestamp=now,
@@ -1066,7 +1071,7 @@ def test_metadata_rejects_an_empty_description():
             capability="member-lookup",
             description="",
             version="1.0.0",
-            integrity_hash="a" * 64,
+            integrity_hash="a" * 128,
             target_url="http://localhost:5000/login",
             created_timestamp=now,
             last_updated_timestamp=now,

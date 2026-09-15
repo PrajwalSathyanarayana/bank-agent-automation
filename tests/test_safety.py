@@ -4,9 +4,10 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 import pytest
-from pydantic import SecretStr
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from src.config.env import env
+from src.config.settings import settings
 from src.safety.allowlist import (
     ALLOWLIST,
     AllowlistConfig,
@@ -18,13 +19,8 @@ from src.safety.allowlist import (
 )
 from src.safety.authorization import MISMATCH, NO_CHECKS, OVER_LIMIT, authorize
 from src.safety.classifier import SafetyEscalation, classify, verify_tier
-from src.safety.integrity import (
-    IntegrityCheckFailed,
-    canonical_bytes,
-    compute_signature,
-    sign,
-    verify,
-)
+from src.safety.integrity import IntegrityCheckFailed, canonical_bytes, sign, verify
+from src.safety.keys import SigningKeyMissing, load_private_key, trusted_keys, write_key_pair
 from src.safety.redactor import REDACTED, redact_dict, redact_text, scrub_known_values, sensitive_patterns_in
 from src.safety.sandbox import sandbox_refusal
 from src.safety.secret_typing import typing_refusal
@@ -326,10 +322,11 @@ def test_scrub_replaces_longer_secret_first():
     assert "def" not in result
 
 
-# --- integrity fingerprint (keyed HMAC-SHA256) ---
+# --- artifact signatures (Ed25519) ---
 
-TEST_KEY = SecretStr("test-signing-key-0123456789-abcdef")
-OTHER_KEY = SecretStr("other-signing-key-0123456789-abcdef")
+TEST_KEY = Ed25519PrivateKey.generate()
+OTHER_KEY = Ed25519PrivateKey.generate()
+TRUSTED = {"test": TEST_KEY.public_key()}
 
 
 def _unsigned_artifact() -> Artifact:
@@ -374,8 +371,17 @@ def _hand_edited(artifact: Artifact, edit) -> Artifact:
     return Artifact.model_validate(data)
 
 
-def test_signed_artifact_verifies():
-    verify(_signed_artifact(), TEST_KEY)  # should not raise
+def test_signed_artifact_verifies_and_names_its_signer():
+    assert verify(_signed_artifact(), TRUSTED) == "test"
+
+
+def test_the_signer_is_found_among_several_trusted_keys():
+    several = {"another": OTHER_KEY.public_key(), "test": TEST_KEY.public_key()}
+    assert verify(_signed_artifact(), several) == "test"
+
+
+def test_a_signature_is_128_hex_characters():
+    assert len(_signed_artifact().metadata.integrity_hash) == 128
 
 
 def test_signing_does_not_change_the_original():
@@ -385,24 +391,30 @@ def test_signing_does_not_change_the_original():
 
 
 def test_same_artifact_always_gets_the_same_signature():
-    # One artifact signed twice; building two would give each its own random IDs.
+    # Ed25519 signatures are deterministic. One artifact signed twice; building two would
+    # give each its own random IDs.
     unsigned = _unsigned_artifact()
     assert sign(unsigned, TEST_KEY).metadata.integrity_hash == sign(unsigned, TEST_KEY).metadata.integrity_hash
 
 
 def test_signature_survives_saving_and_loading_as_json():
     loaded = Artifact.model_validate_json(_signed_artifact().model_dump_json(indent=2))
-    verify(loaded, TEST_KEY)  # should not raise
+    verify(loaded, TRUSTED)  # should not raise
 
 
 def test_unsigned_artifact_fails_verification():
     with pytest.raises(IntegrityCheckFailed, match="unsigned"):
-        verify(_unsigned_artifact(), TEST_KEY)
+        verify(_unsigned_artifact(), TRUSTED)
 
 
-def test_wrong_key_fails_verification():
+def test_a_signature_from_an_untrusted_key_fails_verification():
     with pytest.raises(IntegrityCheckFailed, match="does not match"):
-        verify(_signed_artifact(), OTHER_KEY)
+        verify(sign(_unsigned_artifact(), OTHER_KEY), TRUSTED)
+
+
+def test_no_trusted_keys_fails_verification():
+    with pytest.raises(IntegrityCheckFailed, match="no trusted public keys"):
+        verify(_signed_artifact(), {})
 
 
 @pytest.mark.parametrize(
@@ -429,7 +441,7 @@ def test_wrong_key_fails_verification():
 )
 def test_editing_a_signed_field_fails_verification(edit):
     with pytest.raises(IntegrityCheckFailed, match="does not match"):
-        verify(_hand_edited(_signed_artifact(), edit), TEST_KEY)
+        verify(_hand_edited(_signed_artifact(), edit), TRUSTED)
 
 
 def test_editing_timestamps_still_verifies():
@@ -437,7 +449,7 @@ def test_editing_timestamps_still_verifies():
         d["metadata"]["created_timestamp"] = "2030-01-01T00:00:00Z"
         d["metadata"]["last_updated_timestamp"] = "2030-01-02T00:00:00Z"
 
-    verify(_hand_edited(_signed_artifact(), edit), TEST_KEY)  # should not raise
+    verify(_hand_edited(_signed_artifact(), edit), TRUSTED)  # should not raise
 
 
 def test_canonical_bytes_leave_out_the_signature_and_timestamps():
@@ -451,13 +463,38 @@ def test_canonical_bytes_are_compact_with_sorted_keys():
     assert raw == json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def test_failure_message_reveals_neither_key_nor_correct_signature():
-    tampered = _hand_edited(_signed_artifact(), lambda d: d["metadata"].update(version="9.9.9"))
-    with pytest.raises(IntegrityCheckFailed) as exc_info:
-        verify(tampered, TEST_KEY)
-    message = str(exc_info.value)
-    assert TEST_KEY.get_secret_value() not in message
-    assert compute_signature(tampered, TEST_KEY) not in message
+def test_by_default_signing_and_checking_use_the_configured_keys():
+    # The test run's own key pair, trusted as "tests".
+    assert verify(sign(_unsigned_artifact())) == "tests"
+
+
+def test_signing_with_no_private_key_fails_clearly(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "artifact_private_key_path", tmp_path / "missing.pem")
+    with pytest.raises(SigningKeyMissing, match="no private key at"):
+        sign(_unsigned_artifact())
+
+
+def test_a_file_that_isnt_a_private_key_is_refused(tmp_path):
+    not_a_key = tmp_path / "signing_key.pem"
+    not_a_key.write_text("not a key", encoding="utf-8")
+    with pytest.raises(SigningKeyMissing, match="isn't a usable private key"):
+        load_private_key(not_a_key)
+
+
+def test_only_ed25519_public_keys_are_trusted(tmp_path):
+    write_key_pair(Ed25519PrivateKey.generate(), tmp_path / "private.pem", tmp_path / "trusted" / "discovery.pub")
+    (tmp_path / "trusted" / "broken.pub").write_text("not a key", encoding="utf-8")
+    (tmp_path / "trusted" / "notes.txt").write_text("not a .pub file", encoding="utf-8")
+    assert list(trusted_keys(tmp_path / "trusted")) == ["discovery"]
+    assert trusted_keys(tmp_path / "no_such_folder") == {}
+
+
+def test_a_key_pair_is_never_written_over(tmp_path):
+    private_path, public_path = tmp_path / "private.pem", tmp_path / "trusted" / "discovery.pub"
+    write_key_pair(TEST_KEY, private_path, public_path)
+    with pytest.raises(FileExistsError):
+        write_key_pair(OTHER_KEY, private_path, tmp_path / "trusted" / "other.pub")
+    assert load_private_key(private_path).public_key() == TEST_KEY.public_key()
 
 
 # --- what may be typed where ---

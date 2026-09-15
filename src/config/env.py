@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,7 +31,13 @@ class Env(BaseSettings):
     mock_bank_slow_pages_ms: int = Field(default=0, ge=0)
     mock_bank_username: str
     mock_bank_password: SecretStr
-    artifact_signing_key: SecretStr = Field(min_length=32)
+    # Artifacts are signed with a private key file kept outside the repository, and checked
+    # with the public keys in the trusted folder, which is committed.
+    artifact_private_key_path: str = "./secrets/artifact_signing_key.pem"
+    artifact_trusted_keys_dir: str = "./keys/trusted"
+    # The shared key artifacts were signed with before key pairs: used only to check such an
+    # artifact once, when re-signing it with the private key. Not needed otherwise.
+    artifact_signing_key: Optional[SecretStr] = Field(default=None, min_length=32)
     ws_handoff_port: int = 8765
     artifact_storage_dir: str = "./artifacts"
     evidence_dir: str = "./evidence"

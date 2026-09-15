@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from pydantic import SecretStr
 
 from src.config import settings as settings_module
 from src.config.env import env
@@ -82,13 +83,21 @@ def test_bank_password_scrubbed_from_free_text(tmp_path, monkeypatch):
     assert "[REDACTED]" in raw
 
 
-def test_signing_key_scrubbed_from_free_text(tmp_path, monkeypatch):
+def test_old_signing_key_scrubbed_from_free_text_while_set(tmp_path, monkeypatch):
+    key = "old-shared-signing-key-" + "x" * 32
+    monkeypatch.setattr(env, "artifact_signing_key", SecretStr(key))
     logger = _make_logger(tmp_path, monkeypatch)
-    key = env.artifact_signing_key.get_secret_value()
     logger._emit("TEST_EVENT", {"detail": f"signature check used {key}"})
     raw = logger.log_path.read_text(encoding="utf-8")
     assert key not in raw
     assert "[REDACTED]" in raw
+
+
+def test_logging_works_once_the_old_signing_key_is_removed(tmp_path, monkeypatch):
+    monkeypatch.setattr(env, "artifact_signing_key", None)
+    logger = _make_logger(tmp_path, monkeypatch)
+    logger._emit("TEST_EVENT", {"detail": "saved"})
+    assert _read_lines(logger.log_path)[0]["detail"] == "saved"
 
 
 def test_execution_started_records_resolved_settings(tmp_path, monkeypatch):
@@ -124,7 +133,7 @@ def test_first_line_contains_no_secret_values(tmp_path, monkeypatch):
         env.mock_bank_password,
         env.artifact_signing_key,
     ):
-        assert secret.get_secret_value() not in raw
+        assert secret is None or secret.get_secret_value() not in raw
 
 
 def _record_a_step(logger, **overrides):

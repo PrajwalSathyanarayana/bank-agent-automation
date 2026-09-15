@@ -7,6 +7,8 @@ class Settings(BaseModel):
     # Resolved absolute paths (prevents cwd-relative bugs)
     artifact_storage_dir: Path = Path(env.artifact_storage_dir).resolve()
     evidence_dir: Path = Path(env.evidence_dir).resolve()
+    artifact_private_key_path: Path = Path(env.artifact_private_key_path).resolve()
+    artifact_trusted_keys_dir: Path = Path(env.artifact_trusted_keys_dir).resolve()
 
     # System-level execution timeouts (not per-step)
     # Steps catch fast loops, wall-clock catches slow hangs

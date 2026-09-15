@@ -33,12 +33,14 @@ class RunLogger:
         self.mode = mode
         self.trace_id = str(uuid4())
         self.capability = capability
-        self._secrets = (
+        # The old shared signing key only while it is still set. The private key is a file,
+        # never read here, so it can't reach a log.
+        self._secrets = tuple(secret for secret in (
             env.anthropic_api_key,
             env.mock_bank_secret_key,
             env.mock_bank_password,
             env.artifact_signing_key,
-        )
+        ) if secret is not None)
 
         log_dir = settings.evidence_dir / mode.lower()
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -165,10 +167,10 @@ class RunLogger:
         """A dialog opened while a person had control and was left for them to answer."""
         self._emit("DIALOG_LEFT_FOR_PERSON", {"dialog_type": dialog_type, "dialog_message": message})
 
-    def artifact_saved(self, artifact_id: str, version: str, sha256_hash: str) -> None:
+    def artifact_saved(self, artifact_id: str, version: str, signature: str) -> None:
         self._emit(
             "ARTIFACT_SAVED",
-            {"artifact_id": artifact_id, "version": version, "sha256_hash": sha256_hash},
+            {"artifact_id": artifact_id, "version": version, "signature": signature},
         )
 
     def artifact_unchanged(self, artifact_id: str, version: str) -> None:

@@ -432,7 +432,7 @@ def saved_bill_pay(storage, mock_bank_url):
             known_interruptions=BILL.known_interruptions, confirmation_checks=BILL.confirmation_checks,
             steps=steps or _bill_pay_steps(),
         )
-        return write_artifact(sign(artifact, env.artifact_signing_key))
+        return write_artifact(sign(artifact))
     return save
 
 

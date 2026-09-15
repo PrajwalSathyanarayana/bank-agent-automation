@@ -3,9 +3,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from pydantic import SecretStr
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from src.config.env import env
 from src.config.settings import settings
 from src.safety.integrity import sign
 from src.storage.artifacts import latest_saved, saved_versions
@@ -30,7 +29,7 @@ def _artifact(version="1.0.0", created=None, capability=CAPABILITY) -> Artifact:
                                   created_timestamp=when, last_updated_timestamp=when),
         steps=[Step(sequence_index=0, action=ActionType.NAVIGATE, description="Open the start page")],
     )
-    return sign(artifact, env.artifact_signing_key)
+    return sign(artifact)
 
 
 def _save(store: Path, artifact: Artifact, name=None) -> Path:
@@ -57,6 +56,7 @@ def test_versions_are_ordered_as_numbers(store):
     assert [version for version, _ in saved_versions(CAPABILITY)] == [(1, 2, 0), (1, 9, 0), (1, 10, 0)]
     latest = latest_saved(CAPABILITY)
     assert (latest.version, latest.trusted, latest.artifact.metadata.version) == ((1, 10, 0), True, "1.10.0")
+    assert latest.signed_by == "tests"
 
 
 def test_files_that_are_not_artifacts_are_ignored(store):
@@ -92,9 +92,16 @@ def test_another_capabilitys_artifact_in_this_folder_is_not_trusted(store):
     assert latest_saved(CAPABILITY).trusted is False
 
 
-def test_a_signature_made_with_another_key_is_not_trusted(store):
+def test_a_signature_no_trusted_key_matches_is_not_trusted(store):
     _save(store, _artifact("1.0.0"))
-    assert latest_saved(CAPABILITY, key=SecretStr("another-key-" + "x" * 32)).trusted is False
+    someone_else = {"someone_else": Ed25519PrivateKey.generate().public_key()}
+    latest = latest_saved(CAPABILITY, trusted=someone_else)
+    assert (latest.trusted, latest.signed_by) == (False, None)
+
+
+def test_with_no_trusted_keys_nothing_is_trusted(store):
+    _save(store, _artifact("1.0.0"))
+    assert latest_saved(CAPABILITY, trusted={}).trusted is False
 
 
 def test_among_files_sharing_a_version_the_newest_trusted_one_wins(store):

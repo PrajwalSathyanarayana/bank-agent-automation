@@ -12,7 +12,6 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from src.config.env import env
 from src.config.settings import settings
 from src.discovery.backstop import ScanInputs, scan_artifact
 from src.observability.logger import RunLogger
@@ -122,7 +121,7 @@ def build_and_save(
         logger.artifact_unchanged(existing.artifact_id, existing.version)
         return BuildResult(artifact=latest.artifact, path=latest.path)
     numbered = scanned.artifact.metadata.model_copy(update={"version": version_text(version)})
-    signed = sign(scanned.artifact.model_copy(update={"metadata": numbered}), env.artifact_signing_key)
+    signed = sign(scanned.artifact.model_copy(update={"metadata": numbered}))
     path = write_artifact(signed)
     logger.artifact_saved(signed.metadata.artifact_id, signed.metadata.version, signed.metadata.integrity_hash)
     return BuildResult(artifact=signed, path=path)

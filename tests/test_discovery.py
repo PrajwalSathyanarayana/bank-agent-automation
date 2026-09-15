@@ -2255,11 +2255,11 @@ def test_a_clean_recording_is_saved_signed_and_logged(storage, run_logger):
     metadata = result.artifact.metadata
     assert result.path == storage / "member_servicing_and_bill_pay" / f"{metadata.artifact_id}_v1.0.0.json"
     saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
-    verify(saved, env.artifact_signing_key)
+    verify(saved)
     assert (saved.steps[1].input_value, saved.steps[2].input_value) == ("{member_id}", "Amount: ${amount}")
     lines = _log_lines(run_logger)
     assert [line["event_type"] for line in lines] == ["BACKSTOP_SCAN", "ARTIFACT_SAVED"]
-    assert lines[1]["sha256_hash"] == metadata.integrity_hash
+    assert lines[1]["signature"] == metadata.integrity_hash
     assert [file.name for file in result.path.parent.iterdir()] == [result.path.name]
 
 
@@ -2290,10 +2290,10 @@ def test_the_contracts_known_outcomes_are_saved_and_signed(storage, run_logger):
     assert result.error is None
     saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
     assert saved.known_outcomes == BILL_PAY_OUTCOMES
-    verify(saved, env.artifact_signing_key)
+    verify(saved)
     # The outcomes are part of what the signature covers: dropping one is detected.
     with pytest.raises(IntegrityCheckFailed):
-        verify(saved.model_copy(update={"known_outcomes": BILL_PAY_OUTCOMES[1:]}), env.artifact_signing_key)
+        verify(saved.model_copy(update={"known_outcomes": BILL_PAY_OUTCOMES[1:]}))
 
 
 def test_a_known_outcome_naming_an_undeclared_input_is_not_saved(storage, run_logger):
@@ -2312,7 +2312,7 @@ def test_the_contracts_allowed_pages_are_saved_and_signed(storage, run_logger):
     assert result.error is None
     saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
     assert saved.allowed_paths == ["/login", "/member/*"]
-    verify(saved, env.artifact_signing_key)
+    verify(saved)
 
 
 def test_a_contract_whose_start_page_is_not_allowed_is_not_saved(storage, run_logger):
@@ -2329,7 +2329,7 @@ def test_the_contracts_interruptions_and_confirmation_checks_are_saved_and_signe
     assert result.error is None
     saved = Artifact.model_validate_json(result.path.read_text(encoding="utf-8"))
     assert (saved.known_interruptions, saved.confirmation_checks) == ([PROMO_POPUP], PAYMENT_CHECKS)
-    verify(saved, env.artifact_signing_key)
+    verify(saved)
 
 
 def _ab_recording(description="Enter member 10234", locator="#s1", extra_step=False, outcomes=()):
@@ -2368,7 +2368,7 @@ def test_a_rediscovery_gets_the_next_version_for_what_changed(storage, run_logge
     again = build_and_save(*_ab_recording(**changes), _bs_inputs(), run_logger)
     assert again.artifact.metadata.version == expected
     assert again.path.name == f"{again.artifact.metadata.artifact_id}_v{expected}.json"
-    verify(Artifact.model_validate_json(again.path.read_text(encoding="utf-8")), env.artifact_signing_key)
+    verify(Artifact.model_validate_json(again.path.read_text(encoding="utf-8")))
     assert sorted(path.name for path in again.path.parent.iterdir()) == sorted([first.path.name, again.path.name])
 
 
@@ -2408,7 +2408,7 @@ def test_a_capability_that_is_not_a_simple_name_is_never_used_as_a_folder(storag
     artifact = _bs_artifact()
     escaping = artifact.model_copy(update={"metadata": artifact.metadata.model_copy(update={"capability": "../escape"})})
     with pytest.raises(ValueError, match="simple lowercase name"):
-        write_artifact(sign(escaping, env.artifact_signing_key))
+        write_artifact(sign(escaping))
     assert not storage.exists()
 
 
@@ -2895,7 +2895,7 @@ async def test_discovery_records_the_flow_and_stops_before_the_irreversible_step
     assert model.replies == []
     [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
     artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
-    verify(artifact, env.artifact_signing_key)
+    verify(artifact)
     assert len(artifact.steps) == 13
     assert artifact.steps[-1].safety_tier == SafetyTier.IRREVERSIBLE
     assert [step.input_value for step in artifact.steps if step.action == ActionType.TYPE] == [
@@ -3327,7 +3327,7 @@ async def test_a_person_who_unblocks_the_agent_has_their_steps_saved_in_the_arti
     assert result.status == ExecutionStatus.SUCCESS, result.error
     [saved] = list((storage / "member_servicing_and_bill_pay").iterdir())
     artifact = Artifact.model_validate_json(saved.read_text(encoding="utf-8"))
-    verify(artifact, env.artifact_signing_key)
+    verify(artifact)
     # The agent's sign-in, the person's click, then the agent's check: one recording.
     assert [step.description for step in artifact.steps[4:]] == [
         'Clicked "Member Search" (done by a person)', "Check the search page"]

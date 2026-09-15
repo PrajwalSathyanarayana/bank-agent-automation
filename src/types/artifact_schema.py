@@ -212,7 +212,7 @@ class ArtifactMetadata(BaseModel):
     )
     integrity_hash: Optional[str] = Field(
         default=None,
-        description="Keyed HMAC-SHA256 of the artifact's content; None until signed"
+        description="Ed25519 signature of the artifact's content, as hex; None until signed"
     )
     author: str = "DiscoveryEngine"
     target_url: str = Field(
@@ -238,9 +238,10 @@ class ArtifactMetadata(BaseModel):
     @field_validator("integrity_hash")
     @classmethod
     def validate_hex(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not re.fullmatch(r"[a-f0-9]{64}", v):
+        # An Ed25519 signature is 64 bytes: 128 hex characters.
+        if v is not None and not re.fullmatch(r"[a-f0-9]{128}", v):
             raise ValueError(
-                "integrity_hash must be 64 lowercase hex characters"
+                "integrity_hash must be 128 lowercase hex characters"
             )
         return v
 

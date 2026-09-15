@@ -4,10 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from playwright.async_api import async_playwright
 from werkzeug.serving import make_server
 
 from src.config.settings import settings
+from src.safety.keys import write_key_pair
 from src.surface.browser import launch_args
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mock_bank"))
@@ -32,6 +34,19 @@ def pytest_collection_modifyitems(config, items):
 def anyio_backend():
     # Session scope lets one event loop, and so one browser, serve every test.
     return "asyncio"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def signing_keys(tmp_path_factory):
+    """A throwaway key pair for the whole test run: tests sign and check artifacts with it,
+    never with a real key. Its public key is trusted under the name "tests"."""
+    folder = tmp_path_factory.mktemp("keys")
+    private_key = Ed25519PrivateKey.generate()
+    write_key_pair(private_key, folder / "signing_key.pem", folder / "trusted" / "tests.pub")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(settings, "artifact_private_key_path", folder / "signing_key.pem")
+        patch.setattr(settings, "artifact_trusted_keys_dir", folder / "trusted")
+        yield private_key
 
 
 @pytest.fixture(scope="session")
