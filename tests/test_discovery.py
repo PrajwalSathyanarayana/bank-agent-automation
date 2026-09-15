@@ -3192,6 +3192,25 @@ async def test_a_sandbox_run_is_refused_when_the_bank_is_not_on_this_machine(mon
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "setting, code",
+    [pytest.param("artifact_private_key_path", "SIGNING_KEY_MISSING", id="no private key"),
+     pytest.param("artifact_trusted_keys_dir", "SIGNING_KEY_UNTRUSTED", id="its public key isn't trusted")],
+)
+async def test_a_run_whose_learning_couldnt_be_saved_signed_is_refused_before_the_model(
+        monkeypatch, tmp_path, storage, run_logger, setting, code):
+    # Nothing at that path: no private key, or an empty trusted folder.
+    monkeypatch.setattr(settings, setting, tmp_path / "nothing_here")
+    _browser_trap(monkeypatch)
+    model = ScriptedModel()
+    result = await discover(DiscoveryRequest(_ab_contract(), RUN_VALUES), model, run_logger, sandbox=False)
+    assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, code)
+    assert model.received == []
+    assert not storage.exists()
+    assert f"({code})" in result.summary
+
+
+@pytest.mark.anyio
 async def test_a_production_run_is_not_held_to_this_machine(monkeypatch, run_logger):
     _browser_trap(monkeypatch)
     request = DiscoveryRequest(dataclasses.replace(_ab_contract(), target_url=REMOTE_BANK), RUN_VALUES)

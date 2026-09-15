@@ -78,6 +78,8 @@ REASONS = {
     "UNSUPPORTED_ACTION": "the saved procedure asks for something replay can't do",
     "BROWSER_FAILED": "the browser failed",
     "SANDBOX_NOT_LOCAL": "the test environment isn't on this machine",
+    "SIGNING_KEY_MISSING": "the key that signs learned procedures isn't set up",
+    "SIGNING_KEY_UNTRUSTED": "the key that signs learned procedures isn't among the trusted keys",
     "MAX_STEPS": "it took more steps than allowed",
     "ARTIFACT_INVALID": "the learned procedure couldn't be saved",
     "MODEL_REFUSED": "the model declined to continue",

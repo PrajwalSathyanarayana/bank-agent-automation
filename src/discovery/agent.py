@@ -53,6 +53,7 @@ from src.observability.summary import readable_values, reason_for, summarize
 from src.safety.allowlist import AllowlistViolation, check_domain, check_route, enforce_safety
 from src.safety.authorization import MISMATCH, authorize
 from src.safety.redactor import redact_text, scrub_known_values
+from src.safety.keys import signing_refusal
 from src.safety.sandbox import sandbox_refusal
 from src.types.artifact_schema import CredentialKind, ParamType
 from src.types.placeholders import fill_text
@@ -292,6 +293,10 @@ class _Discovery:
         # then keeps every page it acts on at the bank's own host.
         if self._sandbox and (refusal := sandbox_refusal(self._contract.target_url)):
             return self._end(ExecutionStatus.HARD_ABORT, "SANDBOX_NOT_LOCAL", refusal)
+        # What's learned is saved signed: without a trusted signing key it couldn't be kept,
+        # so stop before anything is spent on the model.
+        if refused := signing_refusal():
+            return self._end(ExecutionStatus.HARD_ABORT, *refused)
         try:
             async with BrowserSession(self._logger, headless=self._headless) as session:
                 self._session = session

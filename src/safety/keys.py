@@ -53,6 +53,19 @@ def trusted_keys(folder: Optional[Path] = None) -> dict[str, Ed25519PublicKey]:
     return keys
 
 
+def signing_refusal() -> Optional[tuple[str, str]]:
+    """Why an artifact learned now couldn't be saved as trusted, as (code, message); None
+    when the private key loads and its public key is among the trusted keys."""
+    try:
+        key = load_private_key()
+    except SigningKeyMissing as error:
+        return "SIGNING_KEY_MISSING", str(error)
+    if key.public_key() not in trusted_keys().values():
+        return "SIGNING_KEY_UNTRUSTED", (
+            f"the private key's public key isn't in {settings.artifact_trusted_keys_dir}")
+    return None
+
+
 def write_key_pair(private_key: Ed25519PrivateKey, private_path: Path, public_path: Path) -> None:
     """Write the private key and its public key as PEM files. Never overwrites: a lost private
     key can't be recovered, and replacing a public key stops artifacts it signed from being
