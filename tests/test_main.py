@@ -163,6 +163,42 @@ def test_the_step_limit_defaults_to_the_setting_and_the_window_stays_hidden():
     assert (args.max_steps, args.headed) == (None, False)
 
 
+@pytest.mark.parametrize(
+    "argv", [pytest.param(["run", "For member 10234, pay 50 to Sunbelt Electric Co"], id="run"),
+             pytest.param(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"],
+                          id="discover"),
+             pytest.param(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"],
+                          id="replay")],
+)
+def test_slow_mo_defaults_to_none_on_every_command(argv):
+    assert parse_args(argv).slow_mo is None
+
+
+def test_slow_mo_takes_a_value_in_milliseconds():
+    args = parse_args(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co",
+                       "--slow-mo", "250"])
+    assert args.slow_mo == 250
+
+
+@pytest.mark.parametrize(
+    "extra, note_shown",
+    [pytest.param([], True, id="neither headed nor operator"),
+     pytest.param(["--headed"], False, id="headed"),
+     pytest.param(["--operator"], False, id="operator")],
+)
+def test_slow_mo_without_a_visible_window_prints_a_note(capsys, extra, note_shown):
+    args = parse_args(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co",
+                       "--slow-mo", "250", *extra])
+    main_module._slow_mo_note(args)
+    assert ("Note:" in capsys.readouterr().out) is note_shown
+
+
+def test_no_note_when_slow_mo_isnt_given(capsys):
+    args = parse_args(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"])
+    main_module._slow_mo_note(args)
+    assert capsys.readouterr().out == ""
+
+
 # --- the replay command ---
 
 REPLAY_ARGS = ["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"]

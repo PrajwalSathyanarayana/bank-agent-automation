@@ -966,8 +966,23 @@ async def test_only_a_visible_replay_fits_its_page_to_the_window(saved_bill_pay,
     monkeypatch.setattr("src.replay.executor.BrowserSession", no_browser)
     for headless in (False, True):
         await replay(ReplayRequest(BILL_PAY, _asked()), replay_logger, headless=headless)
-    assert opened == [{"headless": False, "fit_window": True, "trace": False},
-                      {"headless": True, "fit_window": False, "trace": False}]
+    assert opened == [{"headless": False, "fit_window": True, "trace": False, "slow_mo_ms": None},
+                      {"headless": True, "fit_window": False, "trace": False, "slow_mo_ms": None}]
+
+
+@pytest.mark.anyio
+async def test_slow_mo_reaches_the_browser_session(saved_bill_pay, replay_logger, monkeypatch):
+    saved_bill_pay()
+    opened = []
+
+    def no_browser(logger, **options):
+        opened.append(options)
+        raise PlaywrightError("no browser in this test")
+
+    monkeypatch.setattr("src.replay.executor.BrowserSession", no_browser)
+    await replay(ReplayRequest(BILL_PAY, _asked()), replay_logger, slow_mo_ms=250)
+    [options] = opened
+    assert options["slow_mo_ms"] == 250
 
 
 @pytest.mark.anyio

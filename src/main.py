@@ -45,6 +45,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     ask.add_argument("--headed", action="store_true", help="show the browser window")
     ask.add_argument("--operator", action="store_true",
                      help="when the run needs a person, hand them this run's window (shows the window)")
+    ask.add_argument("--slow-mo", type=int, default=None, metavar="MS",
+                     help="pause this long after every action, for a person watching --headed to follow along")
     run = commands.add_parser("discover", help="discover the bill pay capability with the real model (costs money)")
     _bill_pay_inputs(run)
     run.add_argument("--max-steps", type=int, default=None,
@@ -62,6 +64,8 @@ def _bill_pay_inputs(command: argparse.ArgumentParser) -> None:
     command.add_argument("--headed", action="store_true", help="show the browser window")
     command.add_argument("--operator", action="store_true",
                          help="when the run needs a person, hand them this run's window (shows the window)")
+    command.add_argument("--slow-mo", type=int, default=None, metavar="MS",
+                         help="pause this long after every action, for a person watching --headed to follow along")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -70,16 +74,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return asyncio.run(commands[args.command](args))
 
 
+def _slow_mo_note(args: argparse.Namespace) -> None:
+    if args.slow_mo is not None and not (args.headed or args.operator):
+        print("Note: --slow-mo has no visible effect without --headed or --operator.")
+
+
 async def _run(args: argparse.Namespace) -> int:
     # Checked before anything else, so no model call is paid for when the bank is down.
     if not _bank_is_up():
         print(f"The mock bank isn't answering at {env.mock_bank_base_url}; start it with: python mock_bank/app.py")
         return 2
+    _slow_mo_note(args)
     try:
         async with AsyncExitStack() as stack:
             operator = await _operator(stack, args.operator)
             handled = await handle(args.request, intake_model=ClaudeIntakeModel(), discovery_model=ClaudeModel(),
-                                   headless=not (args.headed or args.operator), operator=operator, trace=True)
+                                   headless=not (args.headed or args.operator), operator=operator, trace=True,
+                                   slow_mo_ms=args.slow_mo)
     except IntakeUnavailable as unavailable:
         print(f"The request couldn't be read right now ({unavailable}); nothing was run. Please try again.")
         return 2
@@ -104,6 +115,7 @@ async def _discover(args: argparse.Namespace) -> int:
     if not _bank_is_up():
         print(f"The mock bank isn't answering at {env.mock_bank_base_url}; start it with: python mock_bank/app.py")
         return 2
+    _slow_mo_note(args)
     logger = RunLogger("DISCOVERY", capability=BILL_PAY)
     request = DiscoveryRequest(
         CONTRACTS[BILL_PAY], {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee}
@@ -112,7 +124,7 @@ async def _discover(args: argparse.Namespace) -> int:
         operator = await _operator(stack, args.operator)
         # A person can only take over a window they can see.
         result = await discover(request, ClaudeModel(), logger, headless=not (args.headed or args.operator),
-                                max_steps=args.max_steps, operator=operator, trace=True)
+                                max_steps=args.max_steps, operator=operator, trace=True, slow_mo_ms=args.slow_mo)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.HUMAN_ESCALATED) else 1
@@ -122,13 +134,14 @@ async def _replay(args: argparse.Namespace) -> int:
     if not _bank_is_up():
         print(f"The mock bank isn't answering at {env.mock_bank_base_url}; start it with: python mock_bank/app.py")
         return 2
+    _slow_mo_note(args)
     logger = RunLogger("REPLAY", capability=BILL_PAY)
     request = ReplayRequest(BILL_PAY, {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee})
     async with AsyncExitStack() as stack:
         operator = await _operator(stack, args.operator)
         # A person can only take over a window they can see.
         result = await replay(request, logger, headless=not (args.headed or args.operator), operator=operator,
-                             trace=True)
+                             trace=True, slow_mo_ms=args.slow_mo)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
     return _exit_code(result)

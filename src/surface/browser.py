@@ -154,15 +154,18 @@ class BrowserSession:
     """
 
     def __init__(self, logger: RunLogger, *, headless: bool = True, fit_window: bool = False,
-                 trace: bool = False) -> None:
+                 trace: bool = False, slow_mo_ms: Optional[int] = None) -> None:
         """fit_window: the page is the window, whatever its size (a visible replay a person
         watches); otherwise one fixed size and scale, which discovery's screenshots need.
         trace: record a Playwright trace to this run's own evidence folder (off by default -
-        real cost per session, so callers opt in; a test suite generally shouldn't)."""
+        real cost per session, so callers opt in; a test suite generally shouldn't).
+        slow_mo_ms: pause this long after every Playwright action, for a person watching a
+        headed run to follow along; no effect on what is recorded, only on pacing."""
         self._logger = logger
         self._headless = headless
         self._fit_window = fit_window
         self._trace = trace
+        self._slow_mo_ms = slow_mo_ms
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -231,7 +234,8 @@ class BrowserSession:
             args = launch_args(env.mock_bank_base_url)
             if self._fit_window and not self._headless:
                 args = [*args, "--start-maximized"]
-            self._browser = await self._playwright.chromium.launch(headless=self._headless, args=args)
+            self._browser = await self._playwright.chromium.launch(headless=self._headless, args=args,
+                                                                    slow_mo=self._slow_mo_ms or 0)
             if self._fit_window:
                 # Nothing is cut off on a smaller screen: the page follows the window, and the
                 # screen's own scaling applies. Never for discovery, whose numbered marks assume

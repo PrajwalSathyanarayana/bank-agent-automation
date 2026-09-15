@@ -179,6 +179,7 @@ async def discover(
     sandbox: Optional[bool] = None,
     operator: Optional[OperatorSetup] = None,
     trace: bool = False,
+    slow_mo_ms: Optional[int] = None,
 ) -> ExecutionResult:
     """Run one discovery and return its result.
 
@@ -192,11 +193,13 @@ async def discover(
     at the irreversible step, the run hands them its window; what they do is recorded
     as the next steps, and after they hand back the agent carries on. trace records a
     Playwright trace to this run's own evidence folder, paused around the password's
-    keystroke (off by default: real cost per run, so callers opt in).
+    keystroke (off by default: real cost per run, so callers opt in). slow_mo_ms paces
+    every action for a person watching a headed run; no effect headless.
     """
     if sandbox is None:
         sandbox = env.target_environment == "sandbox"
-    return await _Discovery(request, model, logger, headless, max_steps, sandbox, operator, trace).execute()
+    return await _Discovery(request, model, logger, headless, max_steps, sandbox, operator, trace,
+                            slow_mo_ms).execute()
 
 
 @dataclass(frozen=True)
@@ -219,7 +222,7 @@ class _ModelUnavailable(Exception):
 class _Discovery:
     def __init__(self, request: DiscoveryRequest, model: Model, logger: RunLogger, headless: bool,
                  max_steps: Optional[int], sandbox: bool, operator: Optional[OperatorSetup],
-                 trace: bool = False) -> None:
+                 trace: bool = False, slow_mo_ms: Optional[int] = None) -> None:
         contract = request.contract
         self._contract = contract
         self._model = model
@@ -228,6 +231,7 @@ class _Discovery:
         self._sandbox = sandbox
         self._operator = operator
         self._trace_enabled = trace
+        self._slow_mo_ms = slow_mo_ms
         self._handoff: Optional[HandoffManager] = None
         self._person: Optional[PersonStepRecorder] = None
         self._handoffs: list[HandoffTelemetry] = []
@@ -303,7 +307,8 @@ class _Discovery:
         if refused := signing_refusal():
             return self._end(ExecutionStatus.HARD_ABORT, *refused)
         try:
-            async with BrowserSession(self._logger, headless=self._headless, trace=self._trace_enabled) as session:
+            async with BrowserSession(self._logger, headless=self._headless, trace=self._trace_enabled,
+                                      slow_mo_ms=self._slow_mo_ms) as session:
                 self._session = session
                 try:
                     check_route(self._contract.target_url, self._contract.allowed_paths)

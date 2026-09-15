@@ -85,15 +85,17 @@ class ReplayRequest:
 
 
 async def replay(request: ReplayRequest, logger: RunLogger, *, headless: bool = True,
-                 operator: Optional[OperatorSetup] = None, trace: bool = False) -> ExecutionResult:
+                 operator: Optional[OperatorSetup] = None, trace: bool = False,
+                 slow_mo_ms: Optional[int] = None) -> ExecutionResult:
     """Run the capability's latest trusted artifact with these inputs; one result, never an exception.
 
     With an operator, a step that needs a person hands them the run's window; without one,
     the run ends HUMAN_ESCALATED there. trace records a Playwright trace to this run's own
     evidence folder, paused around the password's keystroke (off by default: real cost per
-    run, so callers opt in).
+    run, so callers opt in). slow_mo_ms paces every action for a person watching a headed
+    run; no effect headless.
     """
-    return await _Replay(request, logger, headless, operator, trace).execute()
+    return await _Replay(request, logger, headless, operator, trace, slow_mo_ms).execute()
 
 
 class _Stop(Exception):
@@ -143,13 +145,15 @@ class _StepRecord:
 
 class _Replay:
     def __init__(self, request: ReplayRequest, logger: RunLogger, headless: bool,
-                 operator: Optional[OperatorSetup], trace: bool = False) -> None:
+                 operator: Optional[OperatorSetup], trace: bool = False,
+                 slow_mo_ms: Optional[int] = None) -> None:
         self._request = request
         self._logger = logger
         self._headless = headless
         self._operator = operator
         # Not self._trace: _Replay already has a _trace() method (the step-trace recorder).
         self._trace_enabled = trace
+        self._slow_mo_ms = slow_mo_ms
         self._handoff: Optional[HandoffManager] = None
         self._handoffs: list[HandoffTelemetry] = []
         # Time spent with a person, which doesn't count against the run's own limit.
@@ -182,7 +186,7 @@ class _Replay:
         try:
             # A visible run is watched by a person, so its page follows their window.
             async with BrowserSession(self._logger, headless=self._headless, fit_window=not self._headless,
-                                      trace=self._trace_enabled) as session:
+                                      trace=self._trace_enabled, slow_mo_ms=self._slow_mo_ms) as session:
                 self._session = session
                 if self._operator is not None:
                     self._handoff = HandoffManager(

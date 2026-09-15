@@ -2,6 +2,7 @@ import asyncio
 import dataclasses
 import json
 import re
+import time
 from types import SimpleNamespace
 import math
 import struct
@@ -2616,6 +2617,28 @@ async def test_a_session_that_doesnt_trace_has_nothing_to_save(mock_bank_url, ru
     async with BrowserSession(run_logger) as session:
         assert session.tracing is None
     assert run_logger.trace_path is None
+
+
+@pytest.mark.anyio
+async def test_slow_mo_paces_every_action(mock_bank_url, run_logger):
+    async with BrowserSession(run_logger, slow_mo_ms=250) as session:
+        await session.open(f"{mock_bank_url}/login", timeout_ms=10_000)
+        started = time.monotonic()
+        await session.page.fill("input[name='username']", "x")
+        await session.page.fill("input[name='password']", "y")
+        elapsed = time.monotonic() - started
+    assert elapsed >= 0.4  # 2 actions x 250 ms slow_mo, a generous margin under the 500 ms floor
+
+
+@pytest.mark.anyio
+async def test_without_slow_mo_actions_run_at_ordinary_speed(mock_bank_url, run_logger):
+    async with BrowserSession(run_logger) as session:
+        await session.open(f"{mock_bank_url}/login", timeout_ms=10_000)
+        started = time.monotonic()
+        await session.page.fill("input[name='username']", "x")
+        await session.page.fill("input[name='password']", "y")
+        elapsed = time.monotonic() - started
+    assert elapsed < 0.4
 
 
 @pytest.mark.anyio
