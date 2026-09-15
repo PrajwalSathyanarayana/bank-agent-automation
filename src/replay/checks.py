@@ -41,10 +41,12 @@ class CheckValues:
 
 @dataclass(frozen=True)
 class CheckFailed:
-    """What the check expected and what replay saw instead, each in a few words."""
+    """What the check expected and what replay saw instead, each in a few words. next_step
+    marks the one check about the next step's element rather than this step's own result."""
 
     expected: str
     observed: str
+    next_step: bool = False
 
 
 async def verify_step_checks(
@@ -162,7 +164,8 @@ async def _next_step_present(
 
     if await _within(timeout_ms, holds):
         return None
-    return CheckFailed(f"the element for step {next_step.sequence_index} on the page", "none of its locators found it")
+    return CheckFailed(f"the element for step {next_step.sequence_index} on the page", "none of its locators found it",
+                       next_step=True)
 
 
 async def _within(timeout_ms: int, holds: Callable[[], Awaitable[bool]]) -> bool:

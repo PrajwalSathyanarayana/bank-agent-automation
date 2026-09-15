@@ -195,7 +195,7 @@ async def test_the_next_steps_element_must_be_on_the_page(page, value, holds):
     next_step = Step(sequence_index=7, action=ActionType.CLICK, description="Next", locators=[_css(value)])
     failed = await verify_step_checks(page, _checked_step(_check(CheckpointType.NEXT_STEP_TARGET)), next_step, VALUES)
     assert failed == (None if holds else CheckFailed("the element for step 7 on the page",
-                                                     "none of its locators found it"))
+                                                     "none of its locators found it", next_step=True))
 
 
 @pytest.mark.anyio
@@ -878,6 +878,10 @@ async def test_after_a_person_does_a_step_replay_carries_on_and_leaves_the_payme
     assert [(h.trigger_reason, h.step_index, h.resolution) for h in result.handoff_events] == [
         ("LOCATOR_NOT_FOUND", 4, HandoffResolution.RESUMED),
         ("PERSON_HAD_CONTROL", 12, HandoffResolution.MANUAL_COMPLETED)]
+    # Step 3 did its part; only step 4's element was missing, so the pause was at step 4.
+    sign_in = result.step_traces[3]
+    assert (sign_in.status, sign_in.error_message) == (
+        StepStatus.PASSED, "step 4's element wasn't found here; left to that step")
     search = result.step_traces[4]
     assert (search.sequence_index, search.status) == (4, StepStatus.RECOVERED)
     assert [(log.tier, log.details) for log in search.recovery_logs] == [
@@ -906,3 +910,16 @@ async def test_a_step_handed_back_undone_is_tried_once_more_then_fails_as_usual(
     assert [h.resolution for h in result.handoff_events] == [HandoffResolution.RESUMED]
     assert "A person had control during the run." in result.summary
     assert result.irreversible_step == "not_reached"
+
+
+@pytest.mark.anyio
+async def test_unattended_a_missing_element_is_reported_by_the_check_before_it(saved_bill_pay, dashboard_popup,
+                                                                              replay_logger):
+    # With no person the run stops where the check failed: step 3's check that step 4's
+    # element is on the page. With a person, the pause is at step 4 itself (tests above).
+    dashboard_popup(False)
+    saved_bill_pay(_bill_pay_steps(search_locators=[_css("#member-search-gone")]))
+    result = await _replay(replay_logger)
+    assert (result.status, result.error.code, result.failure.step_index) == (
+        ExecutionStatus.TECHNICAL_FAIL, "CHECK_FAILED", 3)
+    assert result.failure.expected == "the element for step 4 on the page"

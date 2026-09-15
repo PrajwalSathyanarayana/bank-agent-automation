@@ -135,6 +135,8 @@ class _StepRecord:
     recoveries: list[RecoveryAttemptLog] = field(default_factory=list)
     # At most one handoff per step: after it, trouble ends the run as it would without a person.
     handed_off: bool = False
+    # Something worth saying in the trace of a step that still passed.
+    note: Optional[str] = None
 
 
 class _Replay:
@@ -211,7 +213,7 @@ class _Replay:
             await self._step_body(record, next_step)
         except _NeedsPerson as need:
             await self._with_person(record, position, next_step, need)
-        self._trace(record, StepStatus.RECOVERED if record.recoveries else StepStatus.PASSED)
+        self._trace(record, StepStatus.RECOVERED if record.recoveries else StepStatus.PASSED, error_message=record.note)
         if step.safety_tier == SafetyTier.IRREVERSIBLE:
             self._irreversible_confirmed = True
 
@@ -426,6 +428,15 @@ class _Replay:
         while True:
             failed = await verify_step_checks(self._page, record.step, next_step, self._values)
             if failed is None:
+                return
+            if failed.next_step and self._handoff is not None:
+                # Only the next step's element is missing. This step's own checks come first and
+                # held, so it did its part: the person is shown the step that needs them, where
+                # that step's own lookup fails. A known outcome on the page still answers first.
+                outcome = await outcome_showing(self._page, self._artifact.known_outcomes)
+                if outcome is not None:
+                    raise _Stop(self._outcome(record, outcome))
+                record.note = f"step {next_step.sequence_index}'s element wasn't found here; left to that step"
                 return
             # The action already happened: after a recovery, only the checks are looked at again.
             await self._after_trouble(record, _Trouble(failed, "CHECK_FAILED"), retry=True)
