@@ -292,6 +292,41 @@ def test_a_result_reads_as_plain_english(status, facts, expected):
     assert _summary(status, **facts) == expected
 
 
+@pytest.mark.parametrize(
+    "status, facts, expected",
+    [
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED,
+                     {"person": "finished", "outputs": READ, "irreversible_step": "completed"},
+                     "Paid $50.00 to Sunbelt Electric Co for member 10234 (confirmed by a person). "
+                     "Checking balance $2,450.32 before, $2,400.32 after.", id="finished by a person"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED, {"person": "finished", "irreversible_step": "unknown"},
+                     f"{ASKED_LINE} A person reported it finished, but the receipt wasn't found. "
+                     "The payment may have gone through: check before trying again.", id="finished, no receipt seen"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED,
+                     {"person": "stopped", "irreversible_step": "not_reached",
+                      "error": ErrorDetail(code="OVER_AUTO_LIMIT", message="over")},
+                     f"{ASKED_LINE} A person was needed (the amount is above the bank's limit for automatic payments) "
+                     "and stopped the task. No payment was made.", id="stopped by a person"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED,
+                     {"person": "timed_out", "irreversible_step": "not_reached",
+                      "error": ErrorDetail(code="PERSON_HAD_CONTROL", message="earlier")},
+                     f"{ASKED_LINE} A person was needed (a person had control earlier in this run, so the final "
+                     "confirmation is left to a person), but the time for a person ran out. No payment was made.",
+                     id="the time for a person ran out"),
+        pytest.param(ExecutionStatus.HUMAN_ESCALATED,
+                     {"person": "window_closed", "irreversible_step": "not_reached",
+                      "error": ErrorDetail(code="CHECK_FAILED", message="failed")},
+                     f"{ASKED_LINE} A person was needed (a screen wasn't the one expected), and the window was "
+                     "closed. No payment was made.", id="the window closed"),
+        pytest.param(ExecutionStatus.SUCCESS, {"person": "helped", "outputs": READ, "irreversible_step": "completed"},
+                     "Paid $50.00 to Sunbelt Electric Co for member 10234. Checking balance $2,450.32 before, "
+                     "$2,400.32 after. A person had control during the run.", id="helped along the way"),
+    ],
+)
+def test_a_persons_part_in_the_run_reads_as_plain_english(status, facts, expected):
+    assert _summary(status, **facts) == expected
+
+
 def test_a_request_missing_an_input_is_described_by_its_goal():
     text = _summary(ExecutionStatus.HARD_ABORT, inputs={"member_id": "10234"},
                     error=ErrorDetail(code="INPUT_INVALID", message="missing inputs: amount"))

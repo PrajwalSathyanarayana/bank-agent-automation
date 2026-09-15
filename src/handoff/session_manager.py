@@ -114,6 +114,15 @@ class Announcer(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class OperatorSetup:
+    """A person is available to this run. Announcements go to announcer, if any;
+    timeout_ms replaces the operator timeout (a test's shorter wait)."""
+
+    announcer: Optional[Announcer] = None
+    timeout_ms: Optional[int] = None
+
+
 @dataclass
 class _Handoff:
     request: HandoffRequest

@@ -6,6 +6,10 @@ caller's inputs are checked against the contract. Then each step runs in order: 
 element, pass the safety gate, act, and verify its checks. Only the contract decides what
 gets in the way (its known outcomes and interruptions), and an irreversible step runs only
 after the payment check. Every run ends in exactly one structured result.
+
+When a person is available, a step that needs one hands them this run's live window
+instead of ending the run, and the run carries on or ends by what they choose. Once a
+person has had control, replay never makes the irreversible step itself.
 """
 import math
 import re
@@ -13,7 +17,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import NoReturn, Optional, Union
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error as PlaywrightError
@@ -23,10 +27,11 @@ from pydantic import SecretStr
 
 from src.config.env import configured_credentials, env
 from src.config.settings import settings
+from src.handoff.session_manager import Choice, HandoffManager, HandoffOutcome, HandoffRequest, OperatorSetup
 from src.locating.checks import element_wording, is_password_box, text_pattern, value_beside, visible_text
 from src.locating.values import UnreadableValue, read_output
 from src.observability.logger import RunLogger
-from src.observability.summary import readable_values, summarize
+from src.observability.summary import readable_values, reason_for, summarize
 from src.replay.checks import CheckFailed, CheckValues, verify_shown_text, verify_step_checks
 from src.replay.locator_resolver import Found, NotFound, find_element
 from src.replay.recovery_engine import Recoveries, interruption_showing, missing_option, outcome_showing, recover
@@ -59,6 +64,7 @@ from src.types.result_schema import (
     HandoffResolution,
     HandoffTelemetry,
     RecoveryAttemptLog,
+    RecoveryTier,
     StepExecutionTrace,
     StepStatus,
 )
@@ -78,9 +84,14 @@ class ReplayRequest:
     inputs: Mapping[str, Union[str, int, float, bool]]
 
 
-async def replay(request: ReplayRequest, logger: RunLogger, *, headless: bool = True) -> ExecutionResult:
-    """Run the capability's latest trusted artifact with these inputs; one result, never an exception."""
-    return await _Replay(request, logger, headless).execute()
+async def replay(request: ReplayRequest, logger: RunLogger, *, headless: bool = True,
+                 operator: Optional[OperatorSetup] = None) -> ExecutionResult:
+    """Run the capability's latest trusted artifact with these inputs; one result, never an exception.
+
+    With an operator, a step that needs a person hands them the run's window; without one,
+    the run ends HUMAN_ESCALATED there.
+    """
+    return await _Replay(request, logger, headless, operator).execute()
 
 
 class _Stop(Exception):
@@ -104,6 +115,15 @@ class _Trouble(Exception):
         self.code = code
 
 
+class _NeedsPerson(Exception):
+    """A step needs a person and one is available: the run hands them its window."""
+
+    def __init__(self, code: str, failed: CheckFailed) -> None:
+        super().__init__(code)
+        self.code = code
+        self.failed = failed
+
+
 @dataclass
 class _StepRecord:
     """What happened in one step so far, for its trace."""
@@ -113,13 +133,25 @@ class _StepRecord:
     attempts: int = 0
     priority: Optional[int] = None
     recoveries: list[RecoveryAttemptLog] = field(default_factory=list)
+    # At most one handoff per step: after it, trouble ends the run as it would without a person.
+    handed_off: bool = False
 
 
 class _Replay:
-    def __init__(self, request: ReplayRequest, logger: RunLogger, headless: bool) -> None:
+    def __init__(self, request: ReplayRequest, logger: RunLogger, headless: bool,
+                 operator: Optional[OperatorSetup]) -> None:
         self._request = request
         self._logger = logger
         self._headless = headless
+        self._operator = operator
+        self._handoff: Optional[HandoffManager] = None
+        self._handoffs: list[HandoffTelemetry] = []
+        # Time spent with a person, which doesn't count against the run's own limit.
+        self._paused_ms = 0
+        self._people = 0
+        self._person_had_control = False
+        # How the last person in the run took part, for the summary ("helped", "finished", …).
+        self._person_end: Optional[str] = None
         self._started = time.monotonic()
         self._start_time = datetime.now(timezone.utc)
         self._artifact: Optional[Artifact] = None
@@ -144,6 +176,11 @@ class _Replay:
         try:
             async with BrowserSession(self._logger, headless=self._headless) as session:
                 self._session = session
+                if self._operator is not None:
+                    self._handoff = HandoffManager(
+                        session, self._logger, capability=self._request.capability, goal=self._goal,
+                        screenshots_dir=self._screenshots, announcer=self._operator.announcer,
+                        timeout_ms=self._operator.timeout_ms)
                 return await self._run()
         except PlaywrightError as error:
             return self._end(ExecutionStatus.TECHNICAL_FAIL,
@@ -170,16 +207,22 @@ class _Replay:
             raise _Stop(await self._failure(record, ExecutionStatus.TECHNICAL_FAIL, "TIMEOUT", CheckFailed(
                 f"the run finished within {settings.replay_total_timeout_ms // 1000} s",
                 f"step {step.sequence_index} not reached in time")))
-        if step.action == ActionType.NAVIGATE:
-            record.attempts = 1
+        try:
+            await self._step_body(record, next_step)
+        except _NeedsPerson as need:
+            await self._with_person(record, position, next_step, need)
+        self._trace(record, StepStatus.RECOVERED if record.recoveries else StepStatus.PASSED)
+        if step.safety_tier == SafetyTier.IRREVERSIBLE:
+            self._irreversible_confirmed = True
+
+    async def _step_body(self, record: _StepRecord, next_step: Optional[Step]) -> None:
+        if record.step.action == ActionType.NAVIGATE:
+            record.attempts += 1
             await self._open_start(record)
         else:
             await self._clear_interruptions(record)
             await self._act(record)
         await self._verify(record, next_step)
-        self._trace(record, StepStatus.RECOVERED if record.recoveries else StepStatus.PASSED)
-        if step.safety_tier == SafetyTier.IRREVERSIBLE:
-            self._irreversible_confirmed = True
 
     # --- before the run: the artifact, the inputs, the credentials ---
 
@@ -294,8 +337,8 @@ class _Replay:
             raise _Stop(await self._failure(record, ExecutionStatus.HARD_ABORT, "ALLOWLIST_VIOLATION",
                                             CheckFailed("a page this capability may act on", str(violation))))
         except SafetyEscalation:
-            raise _Stop(await self._failure(record, ExecutionStatus.HUMAN_ESCALATED, "UNDECLARED_RISK", CheckFailed(
-                f"a {step.safety_tier.value} step", "the element here is riskier than the artifact declares")))
+            await self._escalate(record, ExecutionStatus.HUMAN_ESCALATED, "UNDECLARED_RISK", CheckFailed(
+                f"a {step.safety_tier.value} step", "the element here is riskier than the artifact declares"))
 
         if step.action == ActionType.ASSERT_TEXT:
             failed = await verify_shown_text(element, step.input_value or "", self._values,
@@ -314,6 +357,11 @@ class _Replay:
             if outcome is not None:
                 raise _Stop(self._outcome(record, outcome))
         if step.safety_tier == SafetyTier.IRREVERSIBLE:
+            if self._person_had_control:
+                # A person had this run's window earlier and may already have made it: replay
+                # never makes it after that, so it can't happen twice.
+                await self._escalate(record, ExecutionStatus.HUMAN_ESCALATED, "PERSON_HAD_CONTROL", CheckFailed(
+                    "no person had control earlier in this run", "a person had control earlier in this run"))
             await self._authorize(record)
         await self._do(record, element)
         if not self._allowed_here():
@@ -372,7 +420,7 @@ class _Replay:
             failed = CheckFailed(f"{first.label} {first.expected}", f"{first.label} {first.seen}: {first.reason}")
         else:
             failed = CheckFailed("confirmation checks declared for this step", "none are declared")
-        raise _Stop(await self._failure(record, ExecutionStatus.HUMAN_ESCALATED, result.code, failed))
+        await self._escalate(record, ExecutionStatus.HUMAN_ESCALATED, result.code, failed)
 
     async def _verify(self, record: _StepRecord, next_step: Optional[Step]) -> None:
         while True:
@@ -393,7 +441,7 @@ class _Replay:
             if interruption is not None:
                 await self._recover(record, interruption, trouble.failed)
                 return
-        raise _Stop(await self._failure(record, ExecutionStatus.TECHNICAL_FAIL, trouble.code, trouble.failed))
+        await self._escalate(record, ExecutionStatus.TECHNICAL_FAIL, trouble.code, trouble.failed)
 
     async def _recover(self, record: _StepRecord, interruption, failed: CheckFailed) -> None:
         recovery = await recover(self._page, interruption, self._values, self._artifact.allowed_paths, self._logger,
@@ -403,9 +451,123 @@ class _Replay:
             self._trace(record, StepStatus.RECOVERED, error_message=f"started over: {interruption.code}")
             raise _StartOver()
         if not recovery.log.resolved:
-            raise _Stop(await self._failure(record, ExecutionStatus.TECHNICAL_FAIL, "INTERRUPTION_NOT_CLEARED",
-                                            CheckFailed(failed.expected, f"{interruption.code} couldn't be cleared: "
-                                                                         f"{recovery.log.details}")))
+            await self._escalate(record, ExecutionStatus.TECHNICAL_FAIL, "INTERRUPTION_NOT_CLEARED",
+                                 CheckFailed(failed.expected, f"{interruption.code} couldn't be cleared: "
+                                                              f"{recovery.log.details}"))
+
+    # --- a person in the loop ---
+
+    async def _escalate(self, record: _StepRecord, status: ExecutionStatus, code: str,
+                        failed: CheckFailed) -> NoReturn:
+        """The step needs a person. With one available and none yet at this step, the run
+        hands them its window; otherwise it ends here with this status."""
+        if self._handoff is not None and not record.handed_off:
+            raise _NeedsPerson(code, failed)
+        raise _Stop(await self._failure(record, status, code, failed))
+
+    async def _with_person(self, record: _StepRecord, position: int, next_step: Optional[Step],
+                           need: _NeedsPerson) -> None:
+        """Hand the window to a person; returns only when they handed it back and the step is
+        done. Every other ending stops the run."""
+        step = record.step
+        record.handed_off = True
+        outcome = await self._handoff.request(HandoffRequest(
+            need.code, reason_for(need.code), self._choices(position), step_index=step.sequence_index,
+            step_description=self._clean(step.description)))
+        telemetry = outcome.telemetry
+        self._handoffs.append(telemetry)
+        self._paused_ms += telemetry.duration_ms or 0
+        if telemetry.person_actions is not None:
+            self._people += 1
+            self._person_had_control = True
+        if outcome.choice == Choice.HAND_BACK:
+            self._person_end = "helped"
+            await self._resume(record, next_step, outcome)
+            return
+        finished = outcome.choice == Choice.FINISHED
+        await self._judge_irreversible(outcome, finished=finished)
+        if finished:
+            self._person_end = "finished"
+            raise _Stop(await self._finished_by_person(record, position, outcome))
+        if outcome.window_closed:
+            self._person_end = "window_closed"
+        elif telemetry.resolution == HandoffResolution.OPERATOR_TIMED_OUT:
+            self._person_end = "timed_out"
+        else:
+            self._person_end = "stopped"
+        raise _Stop(await self._failure(record, ExecutionStatus.HUMAN_ESCALATED, need.code, need.failed))
+
+    def _choices(self, position: int) -> tuple[Choice, ...]:
+        # Handing back only makes sense with something left for replay to do: not at or
+        # after the irreversible step, and not at the last action.
+        steps = self._artifact.steps
+        last_action = max((i for i, step in enumerate(steps) if step.action in _ACTIONS), default=-1)
+        irreversible = self._irreversible_index()
+        if position >= last_action or self._irreversible_done or (irreversible is not None and position >= irreversible):
+            return (Choice.FINISHED, Choice.STOP)
+        return (Choice.HAND_BACK, Choice.FINISHED, Choice.STOP)
+
+    async def _resume(self, record: _StepRecord, next_step: Optional[Step], outcome: HandoffOutcome) -> None:
+        """Carry on from wherever the person left the page. A click whose checks now hold was
+        done by the person; any other step, or a click whose checks don't hold, replay does
+        once more itself — filling, choosing, reading and checking are safe to repeat. A
+        failure now ends the run as usual, since each step gets one handoff."""
+        step = record.step
+        await self._clear_interruptions(record)
+        by_person = step.action == ActionType.CLICK and await verify_step_checks(
+            self._page, step, next_step, self._values) is None
+        log = RecoveryAttemptLog(timestamp=datetime.now(timezone.utc), tier=RecoveryTier.TIER_3_HANDOFF,
+                                 resolved=by_person, screenshot_path=outcome.back_screenshot,
+                                 details="done by a person" if by_person else "handed back; replay did the step again")
+        record.recoveries.append(log)
+        if not by_person:
+            await self._step_body(record, next_step)
+            record.recoveries[record.recoveries.index(log)] = log.model_copy(update={"resolved": True})
+
+    async def _finished_by_person(self, record: _StepRecord, position: int, outcome: HandoffOutcome) -> ExecutionResult:
+        """The person finished the task: replay clicks nothing more and reads what the page
+        shows of the outputs still unread. One it can't read is left out; a run a person
+        finished never fails for it."""
+        record.recoveries.append(RecoveryAttemptLog(
+            timestamp=datetime.now(timezone.utc), tier=RecoveryTier.TIER_3_HANDOFF, resolved=True,
+            screenshot_path=outcome.back_screenshot, details="finished by a person"))
+        self._trace(record, StepStatus.RECOVERED)
+        for step in self._artifact.steps[position:]:
+            if step.action == ActionType.EXTRACT_TEXT and step.output_key not in self._outputs:
+                await self._read_if_shown(step)
+        return self._end(ExecutionStatus.HUMAN_ESCALATED)
+
+    async def _read_if_shown(self, step: Step) -> None:
+        found = await find_element(self._page, step, self._values.text, self._logger)
+        if isinstance(found, NotFound):
+            return
+        definition = next(output for output in self._artifact.output_definitions if output.key == step.output_key)
+        try:
+            self._outputs[step.output_key] = read_output(await visible_text(found.element), definition)
+        except (UnreadableValue, PlaywrightError):
+            return
+
+    async def _judge_irreversible(self, outcome: HandoffOutcome, *, finished: bool) -> None:
+        """After a handoff that ends the run: whether the person made the irreversible step,
+        judged from the page, never from anyone's word. Its own checks hold → completed. They
+        don't, after the person said they finished or clicked anything → unknown."""
+        index = self._irreversible_index()
+        if index is None or self._irreversible_confirmed or outcome.telemetry.person_actions is None:
+            return
+        clicked = any(action.kind == "click" for action in outcome.actions)
+        if not (finished or clicked):
+            return
+        self._irreversible_done = True
+        if outcome.window_closed:
+            return
+        steps = self._artifact.steps
+        after = steps[index + 1] if index + 1 < len(steps) else None
+        self._irreversible_confirmed = await verify_step_checks(
+            self._page, _briefly(steps[index]), after, self._values) is None
+
+    def _irreversible_index(self) -> Optional[int]:
+        return next((i for i, step in enumerate(self._artifact.steps) if step.safety_tier == SafetyTier.IRREVERSIBLE),
+                    None)
 
     # --- the end of the run ---
 
@@ -448,11 +610,11 @@ class _Replay:
                                observed=self._clean(failed.observed)[:FAILURE_TEXT_MAX] or "(nothing)",
                                screenshot_path=screenshot)
         self._trace(record, StepStatus.FAILED, error_message=f"{code}: {detail.observed}", screenshot=screenshot)
-        handoff = []
-        if status == ExecutionStatus.HUMAN_ESCALATED:
-            # Until the live handoff exists, a person is needed and the run stops here.
+        handoff = list(self._handoffs)
+        if status == ExecutionStatus.HUMAN_ESCALATED and not handoff:
+            # No person is available to this run: the need is recorded and the run stops here.
             handoff = [HandoffTelemetry(triggered_timestamp=datetime.now(timezone.utc), trigger_reason=code,
-                                        resolution=HandoffResolution.ABORTED)]
+                                        step_index=step.sequence_index, resolution=HandoffResolution.ABORTED)]
         error = ErrorDetail(code=code, message=f"step {step.sequence_index}: expected {detail.expected}; "
                                                f"observed {detail.observed}")
         return self._end(status, error=error, failure=detail, handoff=handoff)
@@ -464,14 +626,14 @@ class _Replay:
         code = error.code if error else (outcome.code if outcome else None)
         self._logger.execution_ended(status.value, code, error.message if error else None)
         retries = sum(max(0, trace.attempt_count - 1) for trace in self._traces)
-        self._logger.summary_metrics(duration_ms, len(self._traces), retries, 0)
+        self._logger.summary_metrics(duration_ms, len(self._traces), retries, self._people)
         state = self._irreversible_state()
         inputs, outputs = readable_values(self._request.inputs, self._outputs,
                                           self._artifact.confirmation_checks if self._artifact else [],
                                           self._artifact.output_definitions if self._artifact else [])
         summary = self._clean(summarize(self._request.capability, "REPLAY", status, goal=self._goal, inputs=inputs,
                                         outputs=outputs, irreversible_step=state, outcome=outcome, failure=failure,
-                                        error=error))
+                                        error=error, person=self._person_end))
         return ExecutionResult(
             run_id=self._logger.trace_id,
             capability=self._request.capability,
@@ -485,7 +647,7 @@ class _Replay:
             duration_ms=duration_ms,
             integrity_verified=self._artifact is not None,
             step_traces=list(self._traces),
-            handoff_events=handoff or [],
+            handoff_events=handoff if handoff is not None else list(self._handoffs),
             evidence_paths=EvidencePaths(log_file=str(self._logger.log_path), screenshots_dir=str(self._screenshots)),
             terminal_outputs=dict(self._outputs) or None,
             outcome=outcome,
@@ -543,11 +705,18 @@ class _Replay:
         return scrub_known_values(redact_text(text), self._secrets)
 
     def _time_left_ms(self) -> int:
-        return int(settings.replay_total_timeout_ms - (time.monotonic() - self._started) * 1000)
+        return int(settings.replay_total_timeout_ms - (time.monotonic() - self._started) * 1000 + self._paused_ms)
 
 
 def _page_path(page: Page) -> str:
     return urlsplit(page.url).path or "/"
+
+
+def _briefly(step: Step) -> Step:
+    # Judging a page a person has already left settled: a short look is enough.
+    return step.model_copy(update={"checkpoints": [
+        checkpoint.model_copy(update={"timeout_ms": min(checkpoint.timeout_ms, 2_000)})
+        for checkpoint in step.checkpoints]})
 
 
 def _first_line(error: Exception) -> str:

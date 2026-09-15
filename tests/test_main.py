@@ -19,6 +19,7 @@ from src.types.result_schema import (
     EvidencePaths,
     ExecutionResult,
     ExecutionStatus,
+    HandoffResolution,
     HandoffTelemetry,
 )
 from src.safety.authorization import authorize
@@ -173,16 +174,52 @@ def test_the_replay_command_asks_for_bill_pay_and_exits_by_status(monkeypatch, c
     monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
     asked = []
 
-    async def fake_replay(request, logger, *, headless):
-        asked.append((request, headless))
+    async def fake_replay(request, logger, *, headless, operator=None):
+        asked.append((request, headless, operator))
         return _result(status, logger)
 
     monkeypatch.setattr(main_module, "replay", fake_replay)
     assert main(REPLAY_ARGS) == exit_code
-    [(request, headless)] = asked
-    assert (request.capability, dict(request.inputs), headless) == (
-        BILL_PAY, {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}, True)
+    [(request, headless, operator)] = asked
+    assert (request.capability, dict(request.inputs), headless, operator) == (
+        BILL_PAY, {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}, True, None)
     assert f'"status": "{status.value}"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "irreversible, exit_code",
+    [
+        pytest.param("completed", 0, id="a person finished it and the receipt was seen"),
+        pytest.param("unknown", 1, id="a person said it was finished but no receipt was seen"),
+    ],
+)
+def test_with_an_operator_the_window_is_shown_and_a_finished_task_exits_by_its_receipt(
+    monkeypatch, capsys, tmp_path, irreversible, exit_code
+):
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
+    monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
+    asked = []
+
+    async def fake_replay(request, logger, *, headless, operator=None):
+        asked.append((headless, operator))
+        finished = HandoffTelemetry(triggered_timestamp=datetime.now(timezone.utc), trigger_reason="OVER_AUTO_LIMIT",
+                                    resolution=HandoffResolution.MANUAL_COMPLETED)
+        return _result(ExecutionStatus.HUMAN_ESCALATED, logger).model_copy(
+            update={"handoff_events": [finished], "irreversible_step": irreversible})
+
+    monkeypatch.setattr(main_module, "replay", fake_replay)
+    assert main([*REPLAY_ARGS, "--operator"]) == exit_code
+    [(headless, operator)] = asked
+    # A person can only take over a window they can see.
+    assert headless is False and operator is not None
+    assert "take over" in capsys.readouterr().out
+
+
+def test_only_replay_takes_an_operator_for_now():
+    assert parse_args(REPLAY_ARGS).operator is False
+    with pytest.raises(SystemExit):
+        parse_args(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co",
+                    "--operator"])
 
 
 def test_the_replay_command_says_when_the_bank_isnt_running(monkeypatch, capsys):

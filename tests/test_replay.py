@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -10,11 +11,13 @@ import blueprints.auth as auth_routes  # the mock bank; tests/conftest.py puts i
 from src.config.env import env
 from src.config.settings import settings
 from src.discovery.artifact_builder import write_artifact
+from src.handoff.session_manager import OperatorSetup
 from src.main import BILL_PAY, CONTRACTS
 from src.replay.executor import ReplayRequest, replay
 from src.safety.integrity import sign
+from src.surface.browser import BrowserSession
 from src.types.artifact_schema import Artifact, ArtifactMetadata
-from src.types.result_schema import ExecutionStatus, StepStatus
+from src.types.result_schema import ExecutionStatus, HandoffResolution, StepStatus
 from src.observability.logger import RunLogger
 from src.replay.checks import CheckFailed, CheckValues, verify_shown_text, verify_step_checks
 from src.replay.locator_resolver import Found, NotFound, find_element
@@ -719,3 +722,187 @@ async def test_a_bank_slower_than_the_page_limit_ends_in_a_clear_failure(saved_b
     assert (result.status, result.error.code) == (ExecutionStatus.TECHNICAL_FAIL, "PAGE_TIMEOUT")
     assert (result.failure.step_index, result.failure.expected, result.failure.observed) == (
         0, "the start page within 1.5 s", "it didn't arrive in time")
+
+
+# --- a person in the loop: the live handoff during a replay ---
+
+HANDOFF_BAR = "[data-bank-agent-handoff]"
+
+
+@pytest.fixture
+def replay_sessions(monkeypatch) -> list:
+    """Every browser session replay opens, so a test can act as the person at its window."""
+    sessions = []
+
+    class _Kept(BrowserSession):
+        async def __aenter__(self):
+            session = await super().__aenter__()
+            sessions.append(session)
+            return session
+
+    monkeypatch.setattr("src.replay.executor.BrowserSession", _Kept)
+    return sessions
+
+
+async def _until(condition, timeout_s=30.0):
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "timed out waiting"
+        await asyncio.sleep(0.05)
+
+
+async def _at_the_bar(sessions, button):
+    """The person, at the paused run's window once its bar offers this button."""
+    await _until(lambda: sessions)
+    page = sessions[-1].page
+    await page.locator(f"{HANDOFF_BAR} button", has_text=button).wait_for(timeout=30_000)
+    return page
+
+
+async def _press(page, label):
+    await page.locator(f"{HANDOFF_BAR} button", has_text=label).click()
+
+
+async def _bar_offers(page, label) -> list[str]:
+    await page.locator(f"{HANDOFF_BAR} button", has_text=label).wait_for(timeout=10_000)
+    return await page.locator(f"{HANDOFF_BAR} button").all_inner_texts()
+
+
+def _with_person(logger, timeout_ms=60_000, **asked):
+    return asyncio.create_task(replay(ReplayRequest(BILL_PAY, _asked(**asked)), logger,
+                                      operator=OperatorSetup(timeout_ms=timeout_ms)))
+
+
+async def _confirm_payment_as_the_person(page):
+    # The person clicks Confirm Payment and presses OK in the bank's own box; the run's own
+    # dialog handler leaves that box to them.
+    async def ok(dialog):
+        await dialog.accept()
+
+    page.once("dialog", ok)
+    await page.click("input[value='Confirm Payment']")
+    await page.locator("div.msg-ok").wait_for(timeout=10_000)
+
+
+@pytest.mark.anyio
+async def test_a_person_confirms_a_payment_over_the_limit_and_replay_reads_the_receipt(
+    saved_bill_pay, dashboard_popup, replay_logger, replay_sessions, monkeypatch
+):
+    dashboard_popup(False)
+    saved_bill_pay()
+    monkeypatch.setattr(env, "auto_execute_limit", Decimal("10.00"))
+    run = _with_person(replay_logger)
+    page = await _at_the_bar(replay_sessions, "Take over")
+    await _press(page, "Take over")
+    # At the payment there is nothing left to hand back: only finishing or stopping fits.
+    assert await _bar_offers(page, "I finished it") == ["I finished it", "Stop the task"]
+    await _confirm_payment_as_the_person(page)
+    await _at_the_bar(replay_sessions, "I finished it")
+    await _press(page, "I finished it")
+    result = await asyncio.wait_for(run, timeout=60)
+
+    assert (result.status, result.error, result.irreversible_step) == (
+        ExecutionStatus.HUMAN_ESCALATED, None, "completed")
+    [handoff] = result.handoff_events
+    assert (handoff.trigger_reason, handoff.step_index, handoff.resolution, handoff.person_actions) == (
+        "OVER_AUTO_LIMIT", 12, HandoffResolution.MANUAL_COMPLETED, 1)
+    before, after = (_amount(result.terminal_outputs[key]) for key in ("checking_balance_before",
+                                                                      "new_checking_balance"))
+    assert after == before - Decimal("50.00")
+    last = result.step_traces[-1]
+    assert (last.sequence_index, last.status, last.recovery_logs[0].details) == (
+        12, StepStatus.RECOVERED, "finished by a person")
+    assert result.summary == (f"Paid $50.00 to Sunbelt Electric Co for member 10234 (confirmed by a person). "
+                              f"Checking balance ${before:,.2f} before, ${after:,.2f} after.")
+
+
+@pytest.mark.anyio
+async def test_a_person_who_stops_the_task_leaves_the_payment_unmade(saved_bill_pay, dashboard_popup, replay_logger,
+                                                                     replay_sessions, monkeypatch):
+    dashboard_popup(False)
+    saved_bill_pay()
+    monkeypatch.setattr(env, "auto_execute_limit", Decimal("10.00"))
+    run = _with_person(replay_logger)
+    page = await _at_the_bar(replay_sessions, "Take over")
+    await _press(page, "Take over")
+    await _bar_offers(page, "Stop the task")
+    await _press(page, "Stop the task")
+    result = await asyncio.wait_for(run, timeout=60)
+    assert (result.status, result.error.code, result.failure.step_index) == (
+        ExecutionStatus.HUMAN_ESCALATED, "OVER_AUTO_LIMIT", 12)
+    assert [(h.resolution, h.person_actions) for h in result.handoff_events] == [(HandoffResolution.ABORTED, 0)]
+    assert result.irreversible_step == "not_reached"
+    assert result.summary == ("Pay $50.00 to Sunbelt Electric Co for member 10234. A person was needed (the amount "
+                              "is above the bank's limit for automatic payments) and stopped the task. "
+                              "No payment was made.")
+
+
+@pytest.mark.anyio
+async def test_when_no_one_takes_over_in_time_the_run_ends_and_says_so(saved_bill_pay, dashboard_popup,
+                                                                      replay_logger, monkeypatch):
+    dashboard_popup(False)
+    saved_bill_pay()
+    monkeypatch.setattr(env, "auto_execute_limit", Decimal("10.00"))
+    result = await asyncio.wait_for(_with_person(replay_logger, timeout_ms=1_500), timeout=60)
+    assert (result.status, result.error.code) == (ExecutionStatus.HUMAN_ESCALATED, "OVER_AUTO_LIMIT")
+    [handoff] = result.handoff_events
+    assert (handoff.resolution, handoff.person_actions) == (HandoffResolution.OPERATOR_TIMED_OUT, None)
+    assert result.summary == ("Pay $50.00 to Sunbelt Electric Co for member 10234. A person was needed (the amount "
+                              "is above the bank's limit for automatic payments), but the time for a person ran out. "
+                              "No payment was made.")
+
+
+@pytest.mark.anyio
+async def test_after_a_person_does_a_step_replay_carries_on_and_leaves_the_payment_to_them(
+    saved_bill_pay, dashboard_popup, replay_logger, replay_sessions
+):
+    dashboard_popup(False)
+    saved_bill_pay(_bill_pay_steps(search_locators=[_css("#member-search-gone")]))
+    run = _with_person(replay_logger)
+    page = await _at_the_bar(replay_sessions, "Take over")
+    await _press(page, "Take over")
+    # Paused early, so all three fit.
+    assert await _bar_offers(page, "Hand back") == ["Hand back", "I finished it", "Stop the task"]
+    await page.click("a[href='/search']")  # the person opens member search themselves
+    await _at_the_bar(replay_sessions, "Hand back")  # the bar, back on the new page
+    await _press(page, "Hand back")
+    # Replay carries on by itself up to the payment, which it now leaves to a person.
+    await _at_the_bar(replay_sessions, "Take over")
+    await _press(page, "Take over")
+    assert await _bar_offers(page, "I finished it") == ["I finished it", "Stop the task"]
+    await _confirm_payment_as_the_person(page)
+    await _at_the_bar(replay_sessions, "I finished it")
+    await _press(page, "I finished it")
+    result = await asyncio.wait_for(run, timeout=60)
+
+    assert [(h.trigger_reason, h.step_index, h.resolution) for h in result.handoff_events] == [
+        ("LOCATOR_NOT_FOUND", 4, HandoffResolution.RESUMED),
+        ("PERSON_HAD_CONTROL", 12, HandoffResolution.MANUAL_COMPLETED)]
+    search = result.step_traces[4]
+    assert (search.sequence_index, search.status) == (4, StepStatus.RECOVERED)
+    assert [(log.tier, log.details) for log in search.recovery_logs] == [
+        (RecoveryTier.TIER_3_HANDOFF, "done by a person")]
+    # Replay did the steps between the two handoffs itself.
+    assert [trace.status for trace in result.step_traces[5:12]] == [StepStatus.PASSED] * 7
+    assert (result.status, result.irreversible_step) == (ExecutionStatus.HUMAN_ESCALATED, "completed")
+    assert "(confirmed by a person)" in result.summary
+
+
+@pytest.mark.anyio
+async def test_a_step_handed_back_undone_is_tried_once_more_then_fails_as_usual(
+    saved_bill_pay, dashboard_popup, replay_logger, replay_sessions
+):
+    dashboard_popup(False)
+    saved_bill_pay(_bill_pay_steps(search_locators=[_css("#member-search-gone")]))
+    run = _with_person(replay_logger)
+    page = await _at_the_bar(replay_sessions, "Take over")
+    await _press(page, "Take over")
+    await _bar_offers(page, "Hand back")
+    await _press(page, "Hand back")  # handed back without doing anything
+    result = await asyncio.wait_for(run, timeout=60)
+    assert (result.status, result.error.code, result.failure.step_index) == (
+        ExecutionStatus.TECHNICAL_FAIL, "LOCATOR_NOT_FOUND", 4)
+    # One handoff per step: the second failure there ends the run.
+    assert [h.resolution for h in result.handoff_events] == [HandoffResolution.RESUMED]
+    assert "A person had control during the run." in result.summary
+    assert result.irreversible_step == "not_reached"

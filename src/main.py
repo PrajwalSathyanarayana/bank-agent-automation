@@ -5,7 +5,8 @@
 
 discover runs one real discovery of the bill pay capability; it calls the Claude API,
 which costs money. replay runs the capability's latest trusted artifact with no model at
-all. Choosing between them by itself, from a goal sentence, comes with the router.
+all; with --operator, a run that needs a person hands them its own window instead of
+stopping. Choosing between them by itself, from a goal sentence, comes with the router.
 """
 import argparse
 import asyncio
@@ -18,6 +19,7 @@ from src.config.env import env
 from src.config.settings import settings
 from src.discovery.agent import ClaudeModel, DiscoveryRequest, discover
 from src.discovery.artifact_builder import ArtifactContract
+from src.handoff.session_manager import OperatorSetup
 from src.observability.logger import RunLogger
 from src.replay.executor import ReplayRequest, replay
 from src.types.artifact_schema import (
@@ -36,7 +38,7 @@ from src.types.artifact_schema import (
     RecoveryAction,
 )
 from src.types.step_schema import Locator, LocatorType
-from src.types.result_schema import ExecutionStatus
+from src.types.result_schema import ExecutionStatus, HandoffResolution
 
 BILL_PAY = "member_servicing_and_bill_pay"
 
@@ -108,6 +110,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                      help=f"a lower step limit for this run (default {settings.discovery_max_steps})")
     again = commands.add_parser("replay", help="replay the bill pay capability's latest trusted artifact (no model)")
     _bill_pay_inputs(again)
+    again.add_argument("--operator", action="store_true",
+                       help="when the run needs a person, hand them this run's window (shows the window)")
     return parser.parse_args(argv)
 
 
@@ -144,11 +148,19 @@ async def _replay(args: argparse.Namespace) -> int:
         return 2
     logger = RunLogger("REPLAY", capability=BILL_PAY)
     request = ReplayRequest(BILL_PAY, {"member_id": args.member_id, "amount": args.amount, "payee_name": args.payee})
-    result = await replay(request, logger, headless=not args.headed)
+    operator = OperatorSetup() if args.operator else None
+    if operator is not None:
+        print("If the run needs a person, the browser window will show a bar asking them to take over.")
+    # A person can only take over a window they can see.
+    result = await replay(request, logger, headless=not (args.headed or args.operator), operator=operator)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
-    # A known outcome is an answer, not a failure; anything else needs someone's attention.
-    return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.BUSINESS_OUTCOME) else 1
+    # A known outcome is an answer, not a failure; so is a task a person finished whose receipt
+    # was seen. Anything else needs someone's attention.
+    last_handoff = result.handoff_events[-1] if result.handoff_events else None
+    finished = (last_handoff is not None and last_handoff.resolution == HandoffResolution.MANUAL_COMPLETED
+                and result.irreversible_step != "unknown")
+    return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.BUSINESS_OUTCOME) or finished else 1
 
 
 def _bank_is_up() -> bool:

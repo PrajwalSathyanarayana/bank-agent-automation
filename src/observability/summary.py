@@ -75,7 +75,19 @@ ESCALATIONS = {
     "NO_CONFIRMATION_CHECKS": "nothing is declared to check before this step",
     "UNDECLARED_RISK": "a step looked riskier than it was recorded as",
     "IRREVERSIBLE_STEP": "the task was learned up to the final confirmation, which a person must make",
+    "PERSON_HAD_CONTROL": "a person had control earlier in this run, so the final confirmation is left to a person",
 }
+# How a handoff that ended the run went, after "A person was needed (why)".
+_PERSON_ENDINGS = {
+    "stopped": " and stopped the task",
+    "timed_out": ", but the time for a person ran out",
+    "window_closed": ", and the window was closed",
+}
+
+
+def reason_for(code: str) -> str:
+    """Why a run stopped or needs a person, in plain words, e.g. for the operator's bar."""
+    return ESCALATIONS.get(code) or _reason(code)
 
 
 def summarize(
@@ -92,26 +104,44 @@ def summarize(
     error: Optional[ErrorDetail] = None,
     escalation: Optional[str] = None,
     version: Optional[str] = None,
+    person: Optional[str] = None,
 ) -> str:
-    """The result in a sentence or two. inputs and outputs are already as a person reads them."""
+    """The result in a sentence or two. inputs and outputs are already as a person reads them.
+
+    person says how a person took part, when one had the run's window: "helped" (handed it
+    back and the run went on), "finished", "stopped", "timed_out" or "window_closed".
+    """
     wording = WORDING.get(capability)
     action = wording.action if wording else "irreversible step"
     values = {**inputs, **outputs}
     asked = _fill(wording.asked if wording else "", values) or (f"Asked: {goal}" if goal else f"Asked: {capability}.")
+    done = _fill(wording.done if wording else "", values) or f"Done: {goal}"
+    results = _fill(wording.results if wording else "", values) or _listed(outputs)
+    reason = escalation or (error.code if error else "")
     parts: list[str] = []
     if status == ExecutionStatus.SUCCESS:
-        parts.append(_fill(wording.done if wording else "", values) or f"Done: {goal}")
-        parts.append(_fill(wording.results if wording else "", values) or _listed(outputs))
+        parts += [done, results]
     elif status == ExecutionStatus.BUSINESS_OUTCOME and outcome is not None:
         parts += [asked, f"Not done: {_lower_first(outcome.description)}."]
+    elif status == ExecutionStatus.HUMAN_ESCALATED and person == "finished":
+        if irreversible_step in ("completed", None):
+            parts += [f"{done.rstrip('.')} (confirmed by a person).", results]
+        else:
+            # The person's word isn't taken on trust: the page didn't show what should follow.
+            parts += [asked, "A person reported it finished, but the receipt wasn't found."]
+    elif status == ExecutionStatus.HUMAN_ESCALATED and person in _PERSON_ENDINGS:
+        needed = reason_for(reason) if reason else "the system stopped for a review"
+        parts += [asked, f"A person was needed ({needed}){_PERSON_ENDINGS[person]}."]
     elif status == ExecutionStatus.HUMAN_ESCALATED:
-        reason = escalation or (error.code if error else "")
         parts += [asked, f"A person needs to decide: {ESCALATIONS.get(reason, 'the system stopped for a review')}."]
     else:
         code = error.code if error else "UNKNOWN"
         where = f" at step {failure.step_index} ({failure.step_description.rstrip('.')})" if failure else ""
         parts += [asked, f"Stopped{where}: {_reason(code)} ({code})."]
-    if status != ExecutionStatus.SUCCESS or irreversible_step != "completed":
+    if person == "helped":
+        parts.append("A person had control during the run.")
+    # A completed payment already reads from the "Paid …" sentence.
+    if not (irreversible_step == "completed" and (status == ExecutionStatus.SUCCESS or person == "finished")):
         parts.append(_irreversible_sentence(action, irreversible_step))
     if mode == "DISCOVERY" and version:
         parts.append(f"Learned and saved as version {version}.")
