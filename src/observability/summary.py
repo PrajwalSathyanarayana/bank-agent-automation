@@ -36,6 +36,11 @@ WORDING = {
         done="Paid {amount} to {payee_name} for member {member_id}.",
         results="Checking balance {checking_balance_before} before, {new_checking_balance} after.",
     ),
+    "update_member_phone": Wording(
+        action="phone change",
+        asked="Change the phone number of member {member_id} to {new_phone}.",
+        done="Changed the phone number of member {member_id} to {new_phone}.",
+    ),
 }
 
 # Each stop code in plain words; the code itself stays in brackets for staff.

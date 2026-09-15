@@ -1,9 +1,17 @@
 import random
+import re
 
 from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
 
 from .activity import current_activity
 from .auth import login_required
+
+# The one phone format the credit union keeps, as in its member records: (602) 555-0142.
+PHONE_FORMAT = re.compile(r"\(\d{3}\) \d{3}-\d{4}")
+PHONE_ERROR = "Phone must be in the form (NNN) NNN-NNNN."
+# An address with one @, a name before it and a dotted domain after it; no spaces.
+EMAIL_FORMAT = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+EMAIL_ERROR = "Email must be a valid address, like name@example.com."
 
 member_bp = Blueprint("member", __name__)
 
@@ -86,10 +94,18 @@ def member_edit_submit(member_id):
     member = _get_member(member_id)
     if member is None:
         return redirect(url_for("member.not_found"))
-
-    member["email"] = request.form.get("email", member["email"])
-    member["phone"] = request.form.get("phone", member["phone"])
     _open_member(member_id)
+
+    email = request.form.get("email", member["email"]).strip()
+    phone = request.form.get("phone", member["phone"]).strip()
+    error = PHONE_ERROR if not PHONE_FORMAT.fullmatch(phone) else (
+        EMAIL_ERROR if not EMAIL_FORMAT.fullmatch(email) else None)
+    if error is not None:
+        # Shown again with what was typed, so it can be corrected; nothing is saved.
+        return render_template("member_edit.html", member=member, saved=False, error=error,
+                               entered={"email": email, "phone": phone})
+    member["email"] = email
+    member["phone"] = phone
     return render_template("member_edit.html", member=member, saved=True)
 
 

@@ -23,6 +23,9 @@
       </tr>
       {% endfor %}
     </table>
+    {% if not member.accounts | selectattr("account_type", "equalto", "savings") | list %}
+    <div class="msg-info">This member has no savings account.</div>
+    {% endif %}
     <div class="actions"><a href="/member/{{ member.member_id }}">Back to Member Detail</a></div>
   </div>
 </div>

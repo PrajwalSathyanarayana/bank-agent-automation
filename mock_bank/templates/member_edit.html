@@ -3,6 +3,8 @@
 {% block breadcrumb %}<a href="/">Home</a> &raquo; Member Services &raquo; Edit Profile{% endblock %}
 {% block content %}
 {% if saved %}<div class="msg-ok">Profile updated successfully.</div>{% endif %}
+{% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
+{% set shown = entered or member %}
 <div class="panel">
   <div class="panel-title">Edit Profile &mdash; {{ member.first_name }} {{ member.last_name }}</div>
   <div class="panel-body">
@@ -10,11 +12,11 @@
       <table class="form" cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td class="lbl">Email:</td>
-          <td><input type="text" name="email" value="{{ member.email }}" size="32"></td>
+          <td><input type="text" name="email" value="{{ shown.email }}" size="32"></td>
         </tr>
         <tr>
           <td class="lbl">Phone:</td>
-          <td><input type="text" name="phone" value="{{ member.phone }}" size="20"></td>
+          <td><input type="text" name="phone" value="{{ shown.phone }}" size="20"></td>
         </tr>
         <tr>
           <td></td>

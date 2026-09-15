@@ -5,13 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.catalog import BILL_PAY, CONTRACTS
+from src.catalog import BILL_PAY, CONTRACTS, PHONE
 from src.config.env import env
 from src.intake import NONE_OF_THEM, ClaudeIntakeModel, IntakeAnswer, intake_tools, interpret, task_line
 
 REQUEST = "For member 10234, pay 50 to Sunbelt Electric Co"
 BILL_PAY_TASK = ("For member <member id>, read the checking balance, pay <amount> to <payee name>, "
                  "then read the new balance.")
+PHONE_TASK = "For member <member id>, change the phone number to <new phone>."
 
 
 class _Scripted:
@@ -77,7 +78,27 @@ async def test_a_value_the_model_supplies_but_the_request_doesnt_state_is_not_us
 async def test_a_request_for_an_unknown_task_gets_a_plain_message(choice):
     answer = await interpret("Close the account of member 10234", CONTRACTS, _Scripted(choice))
     assert (answer.kind, answer.capability) == ("not_supported", None)
-    assert answer.message == f"I can't do that yet. The tasks I know are:\n- {BILL_PAY_TASK}"
+    assert answer.message == f"I can't do that yet. The tasks I know are:\n- {BILL_PAY_TASK}\n- {PHONE_TASK}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "phone", [pytest.param("(520) 555-0199", id="in the bank's form"),
+              pytest.param("520-555-0199", id="in another form: the bank answers that")],
+)
+async def test_a_phone_change_is_understood_as_written(phone):
+    request = f"For member 40412, change the phone number to {phone}"
+    answer = await interpret(request, CONTRACTS, _Scripted((PHONE, {"member_id": "40412", "new_phone": phone})))
+    assert (answer.kind, answer.capability, answer.inputs) == ("run", PHONE, {"member_id": "40412", "new_phone": phone})
+    assert answer.message == f"Understood as: Change the phone number of member 40412 to {phone}."
+
+
+@pytest.mark.anyio
+async def test_a_missing_phone_is_asked_for_in_its_own_words():
+    answer = await interpret("Change the phone number of member 40412", CONTRACTS,
+                             _Scripted((PHONE, {"member_id": "40412", "new_phone": None})))
+    assert answer.missing == ("new_phone",)
+    assert "new phone number, as (NNN) NNN-NNNN" in answer.message
 
 
 @pytest.mark.anyio
@@ -89,7 +110,7 @@ async def test_an_empty_request_asks_what_to_do_without_calling_the_model():
 
 def test_each_declared_task_is_a_strict_tool_with_its_inputs_typed_and_nullable():
     tools = {tool["name"]: tool for tool in intake_tools(CONTRACTS)}
-    assert list(tools) == [BILL_PAY, NONE_OF_THEM]
+    assert list(tools) == [BILL_PAY, PHONE, NONE_OF_THEM]
     bill_pay = tools[BILL_PAY]
     assert bill_pay["strict"] is True and bill_pay["input_schema"]["additionalProperties"] is False
     properties = bill_pay["input_schema"]["properties"]

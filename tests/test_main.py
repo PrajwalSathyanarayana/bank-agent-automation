@@ -12,6 +12,7 @@ from src.config.env import env
 from src.config.settings import settings
 from src.locating.checks import find_phrase, phrase_matches, value_beside
 from src.locating.resolver import resolve
+from src.catalog import PHONE
 from src.handoff.ws_server import FeedUnavailable, HandoffFeed
 from src.intake import IntakeAnswer, IntakeUnavailable
 from src.main import BILL_PAY, CONTRACTS, main, parse_args
@@ -98,6 +99,34 @@ def test_no_outcome_wording_appears_on_the_normal_path(bank):
 def _pages_passed(response) -> set[str]:
     # Every page a request went through, redirects included.
     return {step.request.path for step in (*response.history, response)}
+
+
+def test_the_phone_contract_declares_its_inputs_outcomes_and_pages():
+    contract = CONTRACTS[PHONE]
+    assert [parameter.key for parameter in contract.input_parameters] == ["member_id", "new_phone"]
+    # Nothing to read and nothing irreversible: no outputs, no payment check.
+    assert (contract.output_definitions, contract.confirmation_checks) == ([], [])
+    assert [outcome.code for outcome in contract.known_outcomes] == ["MEMBER_NOT_FOUND", "INVALID_PHONE"]
+    assert contract.target_url == settings.mock_bank_login_url
+
+
+def test_the_phone_task_runs_on_its_own_pages_and_the_bank_answers_as_declared(bank):
+    contract = CONTRACTS[PHONE]
+    flow = [("GET", "/", None), ("GET", "/dashboard", None), ("GET", "/search", None),
+            ("POST", "/search", {"member_id": "40412"}), ("GET", "/member/40412/edit", None)]
+    visited = set()
+    for method, path, data in flow:
+        visited |= _pages_passed(bank.open(path, method=method, data=data, follow_redirects=True))
+    saved = bank.post("/member/40412/edit", data={"email": "grace@example.com", "phone": "(520) 555-0199"})
+    refused = bank.post("/member/40412/edit", data={"email": "grace@example.com", "phone": "520-555-0199"})
+    visited |= _pages_passed(saved) | _pages_passed(bank.get("/member/99999", follow_redirects=True))
+    assert sorted(path for path in visited if not route_allowed(path, contract.allowed_paths)) == []
+    assert not route_allowed("/billpay", contract.allowed_paths)
+    # The bank's words: a good save confirms itself; the refusal is the declared outcome.
+    [invalid] = [outcome for outcome in contract.known_outcomes if outcome.code == "INVALID_PHONE"]
+    assert phrase_matches(_visible_text(saved), "Profile updated successfully.")
+    assert not phrase_matches(_visible_text(saved), invalid.text)
+    assert phrase_matches(_visible_text(refused), invalid.text)
 
 
 def test_every_page_of_the_flow_and_its_outcomes_is_allowed_but_profile_edit_is_not(bank):

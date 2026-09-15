@@ -118,6 +118,48 @@ def test_member_edit_submit_updates_record(logged_in_client):
     assert b"laura.w.updated@example.com" in resp.data
 
 
+@pytest.mark.parametrize("phone", ["520-555-0199", "5205550199", "(520)555-0199", "(520) 555-01999", ""])
+def test_a_phone_in_any_other_form_is_refused_and_nothing_is_saved(logged_in_client, phone):
+    resp = logged_in_client.post("/member/10234/edit",
+                                 data={"email": "laura.w.updated@example.com", "phone": phone})
+    assert resp.status_code == 200
+    assert b"Phone must be in the form (NNN) NNN-NNNN." in resp.data
+    assert b"Profile updated successfully" not in resp.data
+    # What was typed stays in the form to be corrected ...
+    assert f'name="phone" value="{phone}"'.encode() in resp.data
+    # ... but the record keeps its email and phone.
+    saved = logged_in_client.get("/member/10234/edit").data
+    assert b"laura.whitfield@example.com" in saved and b"(602) 555-0142" in saved
+
+
+@pytest.mark.parametrize("email", ["not-an-email", "laura@example", "laura w@example.com", "@example.com", ""])
+def test_an_email_that_isnt_an_address_is_refused_and_nothing_is_saved(logged_in_client, email):
+    resp = logged_in_client.post("/member/10234/edit", data={"email": email, "phone": "(602) 555-0142"})
+    assert resp.status_code == 200
+    assert b"Email must be a valid address, like name@example.com." in resp.data
+    assert b"Profile updated successfully" not in resp.data
+    assert b"laura.whitfield@example.com" in logged_in_client.get("/member/10234/edit").data
+
+
+def test_a_new_email_address_is_saved(logged_in_client):
+    resp = logged_in_client.post("/member/10234/edit", data={"email": " l.whitfield@example.org ",
+                                                             "phone": "(602) 555-0142"})
+    assert b"Profile updated successfully" in resp.data
+    assert b'name="email" value="l.whitfield@example.org"' in logged_in_client.get("/member/10234/edit").data
+
+
+def test_the_accounts_page_says_when_a_member_has_no_savings_account(logged_in_client):
+    assert b"This member has no savings account." in logged_in_client.get("/member/20567/accounts").data
+    assert b"This member has no savings account." not in logged_in_client.get("/member/10234/accounts").data
+
+
+def test_a_phone_in_the_right_form_is_saved_without_surrounding_spaces(logged_in_client):
+    resp = logged_in_client.post("/member/10234/edit",
+                                 data={"email": "laura.whitfield@example.com", "phone": "  (520) 555-0199 "})
+    assert b"Profile updated successfully" in resp.data
+    assert b'name="phone" value="(520) 555-0199"' in logged_in_client.get("/member/10234/edit").data
+
+
 def test_member_accounts_lists_checking_and_savings(logged_in_client):
     resp = logged_in_client.get("/member/10234/accounts")
     assert resp.status_code == 200

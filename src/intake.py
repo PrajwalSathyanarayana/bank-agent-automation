@@ -147,7 +147,8 @@ async def interpret(request: str, contracts: Mapping[str, ArtifactContract], mod
             continue
         inputs[parameter.key] = value
     if missing:
-        needed = "; ".join(parameter.description.lower() for parameter in missing)
+        # Only the first letter lowered: "(NNN) NNN-NNNN" and "ID" keep their case.
+        needed = "; ".join(parameter.description[:1].lower() + parameter.description[1:] for parameter in missing)
         return IntakeAnswer("needs_input", f"To do that I also need: {needed}. Please say it in the request, "
                             "with any amount written in figures.", capability=capability, inputs=inputs,
                             missing=tuple(parameter.key for parameter in missing))
