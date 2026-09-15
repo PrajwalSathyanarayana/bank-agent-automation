@@ -12,7 +12,8 @@ from src.config.env import env
 from src.config.settings import settings
 from src.locating.checks import find_phrase, phrase_matches, value_beside
 from src.locating.resolver import resolve
-from src.catalog import PHONE
+from src.catalog import CHECKING, EMAIL, PHONE, SAVINGS
+from src.locating.values import read_output
 from src.handoff.ws_server import FeedUnavailable, HandoffFeed
 from src.intake import IntakeAnswer, IntakeUnavailable
 from src.main import BILL_PAY, CONTRACTS, main, parse_args
@@ -398,6 +399,50 @@ async def test_an_expired_session_shows_the_declared_text_once(page):
     # Signed out, the dashboard sends the browser to the session-timeout page.
     await page.goto("/dashboard")
     assert len(await find_phrase(page, _interruption("SESSION_EXPIRED").text)) == 1
+
+
+# --- the three read and profile tasks ---
+
+def test_the_email_and_balance_contracts_declare_their_inputs_outputs_answers_and_pages():
+    declared = {
+        EMAIL: (["member_id", "new_email"], [], ["MEMBER_NOT_FOUND", "INVALID_EMAIL"], "/member/10234/edit"),
+        CHECKING: (["member_id"], ["checking_balance"], ["MEMBER_NOT_FOUND"], "/member/10234"),
+        SAVINGS: (["member_id"], ["savings_balance"], ["MEMBER_NOT_FOUND", "NO_SAVINGS_ACCOUNT"],
+                  "/member/10234/accounts"),
+    }
+    for capability, (inputs, outputs, codes, page_needed) in declared.items():
+        contract = CONTRACTS[capability]
+        assert [parameter.key for parameter in contract.input_parameters] == inputs, capability
+        assert [output.key for output in contract.output_definitions] == outputs, capability
+        assert [outcome.code for outcome in contract.known_outcomes] == codes, capability
+        # A balance is money, read exactly; nothing here is irreversible.
+        assert all((output.type, output.currency) == (OutputType.MONEY, "USD") for output in contract.output_definitions)
+        assert contract.confirmation_checks == []
+        assert route_allowed(page_needed, contract.allowed_paths), capability
+        assert not route_allowed("/billpay", contract.allowed_paths), capability
+
+
+def test_the_new_answers_are_worded_as_the_bank_shows_them(bank):
+    [invalid_email] = [outcome for outcome in CONTRACTS[EMAIL].known_outcomes if outcome.code == "INVALID_EMAIL"]
+    refused = bank.post("/member/40412/edit", data={"email": "g@example", "phone": "(480) 555-0117"})
+    assert phrase_matches(_visible_text(refused), invalid_email.text)
+    [no_savings] = [outcome for outcome in CONTRACTS[SAVINGS].known_outcomes if outcome.code == "NO_SAVINGS_ACCOUNT"]
+    assert phrase_matches(_visible_text(bank.get("/member/20567/accounts")), no_savings.text)
+    assert not phrase_matches(_visible_text(bank.get("/member/10234/accounts")), no_savings.text)
+
+
+@pytest.mark.anyio
+async def test_both_balances_are_read_by_their_labels_on_the_real_pages(page, dashboard_popup):
+    # The cell right after each label, as discovery's reading step and replay read it.
+    dashboard_popup(False)
+    await _sign_in(page)
+    await page.goto("/member/40412")
+    checking = await value_beside(page, "Primary Account Balance:")
+    await page.goto("/member/40412/accounts")
+    savings = await value_beside(page, "savings")
+    for shown, capability in ((checking, CHECKING), (savings, SAVINGS)):
+        assert shown is not None and shown.startswith("$"), capability
+        read_output(shown, CONTRACTS[capability].output_definitions[0])  # a USD amount, read exactly
 
 
 @pytest.mark.anyio

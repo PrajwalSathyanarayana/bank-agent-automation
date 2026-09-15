@@ -26,6 +26,9 @@ from src.types.step_schema import Locator, LocatorType
 
 BILL_PAY = "member_servicing_and_bill_pay"
 PHONE = "update_member_phone"
+EMAIL = "update_member_email"
+CHECKING = "look_up_checking_balance"
+SAVINGS = "read_savings_balance"
 
 # Shared by the tasks: the teller's sign-in, the bank's answer for an unknown member, and the
 # obstacles replay clears by itself, each with the one recovery a person approved.
@@ -43,6 +46,10 @@ _PROMO_POPUP = KnownInterruption(
 _SESSION_EXPIRED = KnownInterruption(
     code="SESSION_EXPIRED", description="The session expired; the bank forgot the member and any pending payment",
     signal=InterruptionSignal.PAGE_TEXT, text="Your session has expired.", recovery=RecoveryAction.START_OVER)
+# The pages each kind of task may visit: signing in, finding the member, and then either the
+# profile editor or the member's pages that show balances. Bill Pay is on neither list.
+_PROFILE_PAGES = ["/", "/login", "/dashboard", "/search", "/member/*", "/member/*/edit", "/session-timeout"]
+_READING_PAGES = ["/", "/login", "/dashboard", "/search", "/member/*", "/member/*/accounts", "/session-timeout"]
 
 CONTRACTS = {
     BILL_PAY: ArtifactContract(
@@ -103,7 +110,62 @@ CONTRACTS = {
                          signal=OutcomeSignal.PAGE_TEXT, text="Phone must be in the form (NNN) NNN-NNNN."),
         ],
         # The member's pages and the profile editor; Bill Pay is not one of this task's pages.
-        allowed_paths=["/", "/login", "/dashboard", "/search", "/member/*", "/member/*/edit", "/session-timeout"],
+        allowed_paths=_PROFILE_PAGES,
+        known_interruptions=[_PROMO_POPUP, _SESSION_EXPIRED],
+    ),
+    # Changes member data on the same editor as the phone; the bank refuses an address that
+    # isn't one, in its own words.
+    EMAIL: ArtifactContract(
+        capability=EMAIL,
+        description="For member {member_id}, change the email address to {new_email}.",
+        target_url=settings.mock_bank_login_url,
+        input_parameters=[
+            InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID"),
+            InputParamDefinition(key="new_email", type=ParamType.STRING,
+                                 description="New email address, like name@example.com"),
+        ],
+        output_definitions=[],
+        credentials=_TELLER,
+        known_outcomes=[
+            _MEMBER_NOT_FOUND,
+            KnownOutcome(code="INVALID_EMAIL", description="The email address isn't a valid address",
+                         signal=OutcomeSignal.PAGE_TEXT, text="Email must be a valid address, like name@example.com."),
+        ],
+        allowed_paths=_PROFILE_PAGES,
+        known_interruptions=[_PROMO_POPUP, _SESSION_EXPIRED],
+    ),
+    # Read only: nothing is changed, so the only answer besides the balance is an unknown member.
+    CHECKING: ArtifactContract(
+        capability=CHECKING,
+        description="For member {member_id}, read the checking balance.",
+        target_url=settings.mock_bank_login_url,
+        input_parameters=[InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID")],
+        output_definitions=[
+            OutputParamDefinition(key="checking_balance", type=OutputType.MONEY, currency="USD",
+                                  description="The member's checking balance"),
+        ],
+        credentials=_TELLER,
+        known_outcomes=[_MEMBER_NOT_FOUND],
+        allowed_paths=_READING_PAGES,
+        known_interruptions=[_PROMO_POPUP, _SESSION_EXPIRED],
+    ),
+    # Read only, from the accounts list; a member with no savings account is the bank's answer.
+    SAVINGS: ArtifactContract(
+        capability=SAVINGS,
+        description="For member {member_id}, read the savings balance.",
+        target_url=settings.mock_bank_login_url,
+        input_parameters=[InputParamDefinition(key="member_id", type=ParamType.STRING, description="Member ID")],
+        output_definitions=[
+            OutputParamDefinition(key="savings_balance", type=OutputType.MONEY, currency="USD",
+                                  description="The member's savings balance"),
+        ],
+        credentials=_TELLER,
+        known_outcomes=[
+            _MEMBER_NOT_FOUND,
+            KnownOutcome(code="NO_SAVINGS_ACCOUNT", description="The member has no savings account",
+                         signal=OutcomeSignal.PAGE_TEXT, text="This member has no savings account."),
+        ],
+        allowed_paths=_READING_PAGES,
         known_interruptions=[_PROMO_POPUP, _SESSION_EXPIRED],
     ),
 }

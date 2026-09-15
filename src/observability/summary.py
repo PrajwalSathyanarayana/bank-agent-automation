@@ -41,6 +41,21 @@ WORDING = {
         asked="Change the phone number of member {member_id} to {new_phone}.",
         done="Changed the phone number of member {member_id} to {new_phone}.",
     ),
+    "update_member_email": Wording(
+        action="email change",
+        asked="Change the email address of member {member_id} to {new_email}.",
+        done="Changed the email address of member {member_id} to {new_email}.",
+    ),
+    "look_up_checking_balance": Wording(
+        action="lookup",
+        asked="Look up the checking balance for member {member_id}.",
+        done="Checking balance for member {member_id}: {checking_balance}.",
+    ),
+    "read_savings_balance": Wording(
+        action="lookup",
+        asked="Look up the savings balance for member {member_id}.",
+        done="Savings balance for member {member_id}: {savings_balance}.",
+    ),
 }
 
 # Each stop code in plain words; the code itself stays in brackets for staff.

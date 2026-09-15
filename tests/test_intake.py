@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.catalog import BILL_PAY, CONTRACTS, PHONE
+from src.catalog import BILL_PAY, CHECKING, CONTRACTS, EMAIL, PHONE, SAVINGS
 from src.config.env import env
 from src.intake import NONE_OF_THEM, ClaudeIntakeModel, IntakeAnswer, intake_tools, interpret, task_line
 
@@ -13,6 +13,9 @@ REQUEST = "For member 10234, pay 50 to Sunbelt Electric Co"
 BILL_PAY_TASK = ("For member <member id>, read the checking balance, pay <amount> to <payee name>, "
                  "then read the new balance.")
 PHONE_TASK = "For member <member id>, change the phone number to <new phone>."
+EMAIL_TASK = "For member <member id>, change the email address to <new email>."
+CHECKING_TASK = "For member <member id>, read the checking balance."
+SAVINGS_TASK = "For member <member id>, read the savings balance."
 
 
 class _Scripted:
@@ -78,7 +81,9 @@ async def test_a_value_the_model_supplies_but_the_request_doesnt_state_is_not_us
 async def test_a_request_for_an_unknown_task_gets_a_plain_message(choice):
     answer = await interpret("Close the account of member 10234", CONTRACTS, _Scripted(choice))
     assert (answer.kind, answer.capability) == ("not_supported", None)
-    assert answer.message == f"I can't do that yet. The tasks I know are:\n- {BILL_PAY_TASK}\n- {PHONE_TASK}"
+    # Every declared task, in the catalog's order of names.
+    assert answer.message == ("I can't do that yet. The tasks I know are:\n"
+                              f"- {CHECKING_TASK}\n- {BILL_PAY_TASK}\n- {SAVINGS_TASK}\n- {EMAIL_TASK}\n- {PHONE_TASK}")
 
 
 @pytest.mark.anyio
@@ -91,6 +96,25 @@ async def test_a_phone_change_is_understood_as_written(phone):
     answer = await interpret(request, CONTRACTS, _Scripted((PHONE, {"member_id": "40412", "new_phone": phone})))
     assert (answer.kind, answer.capability, answer.inputs) == ("run", PHONE, {"member_id": "40412", "new_phone": phone})
     assert answer.message == f"Understood as: Change the phone number of member 40412 to {phone}."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "capability, request_text, inputs, understood",
+    [
+        pytest.param(CHECKING, "What is the checking balance for member 10234?", {"member_id": "10234"},
+                     "Look up the checking balance for member 10234.", id="checking balance"),
+        pytest.param(SAVINGS, "What is the savings balance for member 20567?", {"member_id": "20567"},
+                     "Look up the savings balance for member 20567.", id="savings balance"),
+        pytest.param(EMAIL, "For member 40412, change the email address to g.n@example.org",
+                     {"member_id": "40412", "new_email": "g.n@example.org"},
+                     "Change the email address of member 40412 to g.n@example.org.", id="email change"),
+    ],
+)
+async def test_each_new_task_is_understood_in_its_own_words(capability, request_text, inputs, understood):
+    answer = await interpret(request_text, CONTRACTS, _Scripted((capability, inputs)))
+    assert (answer.kind, answer.capability, answer.inputs) == ("run", capability, inputs)
+    assert answer.message == f"Understood as: {understood}"
 
 
 @pytest.mark.anyio
@@ -110,7 +134,7 @@ async def test_an_empty_request_asks_what_to_do_without_calling_the_model():
 
 def test_each_declared_task_is_a_strict_tool_with_its_inputs_typed_and_nullable():
     tools = {tool["name"]: tool for tool in intake_tools(CONTRACTS)}
-    assert list(tools) == [BILL_PAY, PHONE, NONE_OF_THEM]
+    assert list(tools) == [CHECKING, BILL_PAY, SAVINGS, EMAIL, PHONE, NONE_OF_THEM]
     bill_pay = tools[BILL_PAY]
     assert bill_pay["strict"] is True and bill_pay["input_schema"]["additionalProperties"] is False
     properties = bill_pay["input_schema"]["properties"]
