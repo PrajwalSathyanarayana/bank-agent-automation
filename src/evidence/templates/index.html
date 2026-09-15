@@ -35,19 +35,43 @@
   .badge.fail { background: var(--fail-bg); color: var(--fail); }
   .empty { color: var(--muted); font-style: italic; padding: 24px 0; }
   .summary-cell { max-width: 360px; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+    margin: 0 0 24px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; font-size: 0.85rem; color: var(--muted);
+  }
+  .legend .key { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; font-size: 0.9rem; }
+  .toolbar select {
+    font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+  tr[hidden] { display: none; }
 </style>
 </head>
 <body>
 <main>
   <h1>Evidence</h1>
-  <p class="sub">{{ rows | length }} run{{ "" if rows | length == 1 else "s" }}</p>
+  <p class="sub" id="count">{{ rows | length }} run{{ "" if rows | length == 1 else "s" }}</p>
+  <div class="legend">
+    <span class="key"><span class="badge ok">Done</span> completed successfully</span>
+    <span class="key"><span class="badge answer">The bank's answer</span> a real answer, not a failure (e.g. no such member)</span>
+    <span class="key"><span class="badge person">A person was needed</span> paused for someone to decide</span>
+    <span class="key"><span class="badge fail">Stopped</span> a technical problem</span>
+  </div>
   {% if rows %}
-  <table>
-    <tr><th>Capability</th><th>Mode</th><th>Status</th><th>Summary</th><th>Started</th><th>Duration</th></tr>
+  <div class="toolbar">
+    <label for="mode-filter">Mode:</label>
+    <select id="mode-filter">
+      <option value="">All</option>
+      <option value="Replay">Replay</option>
+      <option value="Discovery">Discovery</option>
+    </select>
+  </div>
+  <table id="runs">
+    <tr><th>Capability</th><th>Status</th><th>Summary</th><th>Started</th><th>Duration</th></tr>
     {% for row in rows %}
-    <tr>
+    <tr data-mode="{{ row.mode }}">
       <td><a href="{{ row.report_link }}">{{ row.capability }}</a></td>
-      <td>{{ row.mode }}</td>
       <td><span class="badge {{ row.status_class }}">{{ row.status_label }}</span></td>
       <td class="summary-cell">{{ row.summary }}</td>
       <td>{{ row.started }}</td>
@@ -55,6 +79,25 @@
     </tr>
     {% endfor %}
   </table>
+  <script>
+    (() => {
+      const select = document.getElementById('mode-filter');
+      const rows = Array.from(document.querySelectorAll('#runs tr[data-mode]'));
+      const count = document.getElementById('count');
+      const total = rows.length;
+      select.addEventListener('change', () => {
+        const wanted = select.value;
+        let shown = 0;
+        for (const row of rows) {
+          const matches = !wanted || row.dataset.mode === wanted;
+          row.hidden = !matches;
+          if (matches) shown += 1;
+        }
+        count.textContent = wanted ? `${shown} of ${total} run${total === 1 ? '' : 's'} (${wanted})`
+                                   : `${total} run${total === 1 ? '' : 's'}`;
+      });
+    })();
+  </script>
   {% else %}
   <p class="empty">No runs yet.</p>
   {% endif %}

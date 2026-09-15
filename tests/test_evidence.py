@@ -37,9 +37,10 @@ def _result(status, **overrides) -> ExecutionResult:
     return ExecutionResult(**fields)
 
 
-def _step(index, status=StepStatus.PASSED, priority=0, recoveries=0) -> StepExecutionTrace:
-    return StepExecutionTrace(step_id=f"s{index}", sequence_index=index, status=status,
-                              safety_tier=SafetyTier.SAFE, attempt_count=1, duration_ms=100,
+def _step(index, status=StepStatus.PASSED, priority=0, recoveries=0, attempts=1,
+         description="Open Bill Pay for this member.") -> StepExecutionTrace:
+    return StepExecutionTrace(step_id=f"s{index}", sequence_index=index, description=description, status=status,
+                              safety_tier=SafetyTier.SAFE, attempt_count=attempts, duration_ms=100,
                               locator_priority=priority,
                               recovery_logs=[{"timestamp": NOW, "tier": RecoveryTier.TIER_1_RULE, "resolved": True}]
                               * recoveries)
@@ -76,6 +77,31 @@ def test_a_business_outcomes_code_and_description_are_shown(tmp_path):
     assert "No member has this ID" in html
 
 
+def test_the_outcomes_screenshot_is_linked_when_one_was_taken(tmp_path):
+    outcome = BusinessOutcome(code="MEMBER_NOT_FOUND", description="No member has this ID",
+                              screenshot_path=str(tmp_path / "screenshots" / "run_outcome_step06_X.png"))
+    html = render_report(_result(ExecutionStatus.BUSINESS_OUTCOME, outcome=outcome), tmp_path)
+    assert 'src="screenshots/run_outcome_step06_X.png"' in html
+
+
+def test_no_outcome_screenshot_link_when_none_was_taken(tmp_path):
+    # The default outcome in _result() carries no screenshot_path.
+    html = render_report(_result(ExecutionStatus.BUSINESS_OUTCOME), tmp_path)
+    assert "<img" not in html
+
+
+def test_the_outcomes_screenshot_isnt_also_listed_in_the_general_gallery(tmp_path):
+    shots = tmp_path / "screenshots"
+    shots.mkdir()
+    (shots / "run_outcome_step06_X.png").write_bytes(b"")
+    (shots / "run_other.png").write_bytes(b"")
+    outcome = BusinessOutcome(code="MEMBER_NOT_FOUND", description="No member has this ID",
+                              screenshot_path=str(shots / "run_outcome_step06_X.png"))
+    html = render_report(_result(ExecutionStatus.BUSINESS_OUTCOME, outcome=outcome), tmp_path)
+    assert "<figcaption>run_outcome_step06_X.png</figcaption>" not in html  # shown inline, not in the gallery too
+    assert "<figcaption>run_other.png</figcaption>" in html  # everything else still shows there
+
+
 def test_an_errors_code_and_message_are_shown(tmp_path):
     html = render_report(_result(ExecutionStatus.TECHNICAL_FAIL), tmp_path)
     assert "CHECK_FAILED" in html
@@ -89,19 +115,29 @@ def test_a_failures_step_and_what_was_seen_are_shown(tmp_path):
     html = render_report(result, tmp_path)
     assert "Submit the payment" in html
     assert "page /confirm" in html and "page /login" in html
+    assert "<img" not in html  # this failure carries no screenshot_path
 
 
-def test_terminal_outputs_are_listed_as_a_table(tmp_path):
+def test_the_failures_screenshot_is_linked_when_one_was_taken(tmp_path):
+    failure = FailureDetail(step_index=12, step_description="Submit the payment", expected="page /confirm",
+                            observed="page /login",
+                            screenshot_path=str(tmp_path / "screenshots" / "run_failure_step12.png"))
+    html = render_report(_result(ExecutionStatus.TECHNICAL_FAIL, failure=failure), tmp_path)
+    assert 'src="screenshots/run_failure_step12.png"' in html
+
+
+def test_terminal_outputs_are_listed_as_a_table_with_a_readable_label(tmp_path):
     result = _result(ExecutionStatus.SUCCESS, terminal_outputs={"checking_balance_before": "2450.32"})
     html = render_report(result, tmp_path)
-    assert "checking_balance_before" in html
+    assert "Checking balance before" in html
+    assert "checking_balance_before" not in html
     assert "2450.32" in html
 
 
 @pytest.mark.parametrize(
     "priority, shown",
-    [pytest.param(0, "primary", id="the primary locator"),
-     pytest.param(1, "fallback #1", id="a fallback locator"),
+    [pytest.param(0, "the saved locator worked as-is", id="the primary locator"),
+     pytest.param(1, "a backup locator was needed (fallback #1)", id="a fallback locator"),
      pytest.param(None, "—", id="no element to find (navigate)")],
 )
 def test_a_steps_locator_priority_reads_in_words(tmp_path, priority, shown):
@@ -110,10 +146,28 @@ def test_a_steps_locator_priority_reads_in_words(tmp_path, priority, shown):
     assert shown in html
 
 
+def test_a_steps_own_description_is_shown_not_just_its_number(tmp_path):
+    step = _step(0, description="Open Bill Pay for this member.")
+    html = render_report(_result(ExecutionStatus.SUCCESS, step_traces=[step]), tmp_path)
+    assert "Open Bill Pay for this member." in html
+
+
+def test_a_step_with_no_saved_description_says_so_plainly(tmp_path):
+    step = _step(0, description=None)
+    html = render_report(_result(ExecutionStatus.SUCCESS, step_traces=[step]), tmp_path)
+    assert "(no description saved for this step)" in html
+
+
 def test_a_step_with_recoveries_shows_their_count(tmp_path):
     result = _result(ExecutionStatus.SUCCESS, step_traces=[_step(0, status=StepStatus.RECOVERED, recoveries=2)])
     html = render_report(result, tmp_path)
-    assert ">2<" in html
+    assert "2 interruption(s) cleared first" in html
+
+
+def test_a_retried_step_says_how_many_times(tmp_path):
+    step = _step(0, attempts=3)
+    html = render_report(_result(ExecutionStatus.SUCCESS, step_traces=[step]), tmp_path)
+    assert "(retried 2x)" in html
 
 
 def test_no_steps_is_shown_plainly_not_as_an_empty_table(tmp_path):
@@ -210,6 +264,16 @@ def test_the_front_page_links_to_each_runs_own_report(tmp_path):
     _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS))
     html_path, _ = write_index(tmp_path)
     assert 'href="runs/a/report.html"' in html_path.read_text(encoding="utf-8")
+
+
+def test_the_front_page_can_be_filtered_by_mode(tmp_path):
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS, mode="REPLAY"))
+    _write_result(tmp_path / "runs" / "b", _result(ExecutionStatus.SUCCESS, mode="DISCOVERY"))
+    html_path, _ = write_index(tmp_path)
+    html = html_path.read_text(encoding="utf-8")
+    assert '<option value="Replay">Replay</option>' in html
+    assert '<option value="Discovery">Discovery</option>' in html
+    assert 'data-mode="Replay"' in html and 'data-mode="Discovery"' in html
 
 
 def test_an_empty_run_list_says_so_plainly_in_html(tmp_path):

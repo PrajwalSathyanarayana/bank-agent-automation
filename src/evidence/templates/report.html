@@ -84,16 +84,21 @@
   {% if result.terminal_outputs %}
   <h2>Values read</h2>
   <table>
-    <tr><th>Key</th><th>Value</th></tr>
+    <tr><th>Field</th><th>Value</th></tr>
     {% for key, value in result.terminal_outputs.items() %}
-    <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+    <tr><td>{{ key.replace('_', ' ').capitalize() }}</td><td>{{ value }}</td></tr>
     {% endfor %}
   </table>
   {% endif %}
 
   {% if result.outcome %}
   <h2>The bank's answer</h2>
-  <div class="alert answer"><code>{{ result.outcome.code }}</code> — {{ result.outcome.description }}</div>
+  <div class="alert answer">
+    {{ result.outcome.description }}{{ "" if result.outcome.description.endswith(('.', '!', '?')) else "." }}
+    <div style="margin-top:6px;color:var(--muted);font-size:0.82em;">Reference code: <code>{{ result.outcome.code }}</code></div>
+    {% if outcome_screenshot %}<a href="screenshots/{{ outcome_screenshot }}">
+    <img src="screenshots/{{ outcome_screenshot }}" alt="The page showing this answer" style="max-width:360px;margin-top:8px;border-radius:6px;border:1px solid var(--line);"></a>{% endif %}
+  </div>
   {% endif %}
 
   {% if result.error %}
@@ -109,6 +114,8 @@
     Step {{ result.failure.step_index }} ({{ result.failure.step_description }})<br>
     Expected: {{ result.failure.expected }}<br>
     Observed: {{ result.failure.observed }}
+    {% if failure_screenshot %}<br><a href="screenshots/{{ failure_screenshot }}">
+    <img src="screenshots/{{ failure_screenshot }}" alt="The page when it broke" style="max-width:360px;margin-top:8px;border-radius:6px;border:1px solid var(--line);"></a>{% endif %}
   </div>
   {% endif %}
 
@@ -130,14 +137,19 @@
   <h2>Steps</h2>
   {% if result.step_traces %}
   <table>
-    <tr><th>#</th><th>Status</th><th>Attempts</th><th>Locator</th><th>Recoveries</th><th>Note</th></tr>
+    <tr><th>#</th><th>What happened</th><th>Result</th><th>Locator used</th><th>Note</th></tr>
     {% for step in result.step_traces %}
     <tr>
       <td>{{ step.sequence_index }}</td>
-      <td>{{ step.status.value }}</td>
-      <td>{{ step.attempt_count }}</td>
-      <td>{{ "primary" if step.locator_priority == 0 else ("fallback #" ~ step.locator_priority if step.locator_priority is not none else "—") }}</td>
-      <td>{{ step.recovery_logs | length or "—" }}</td>
+      <td>{{ step.description or "(no description saved for this step)" }}</td>
+      <td style="color:{{ 'var(--ok)' if step.status.value == 'PASSED' else ('var(--person)' if step.status.value == 'RECOVERED' else 'var(--fail)') }};font-weight:600;">
+        {{ step.status.value | title }}{{ " (retried " ~ (step.attempt_count - 1) ~ "x)" if step.attempt_count > 1 else "" }}
+      </td>
+      <td>
+        {{ "the saved locator worked as-is" if step.locator_priority == 0
+           else ("a backup locator was needed (fallback #" ~ step.locator_priority ~ ") - the page may have changed since this was learned" if step.locator_priority is not none else "—") }}
+        {{ ("; " ~ step.recovery_logs | length ~ " interruption(s) cleared first") if step.recovery_logs else "" }}
+      </td>
       <td>{{ step.error_message or "" }}</td>
     </tr>
     {% endfor %}

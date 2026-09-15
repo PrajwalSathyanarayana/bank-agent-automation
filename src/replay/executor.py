@@ -367,7 +367,7 @@ class _Replay:
         if step.action == ActionType.SELECT:
             outcome = await missing_option(step, element, self._artifact.known_outcomes, self._values)
             if outcome is not None:
-                raise _Stop(self._outcome(record, outcome))
+                raise _Stop(await self._outcome(record, outcome))
         if step.safety_tier == SafetyTier.IRREVERSIBLE:
             if self._person_had_control:
                 # A person had this run's window earlier and may already have made it: replay
@@ -448,7 +448,7 @@ class _Replay:
                 # that step's own lookup fails. A known outcome on the page still answers first.
                 outcome = await outcome_showing(self._page, self._artifact.known_outcomes)
                 if outcome is not None:
-                    raise _Stop(self._outcome(record, outcome))
+                    raise _Stop(await self._outcome(record, outcome))
                 record.note = f"step {next_step.sequence_index}'s element wasn't found here; left to that step"
                 return
             # The action already happened: after a recovery, only the checks are looked at again.
@@ -459,7 +459,7 @@ class _Replay:
         otherwise the run ends with the declared outcome, a start over, or a failure."""
         outcome = await outcome_showing(self._page, self._artifact.known_outcomes)
         if outcome is not None:
-            raise _Stop(self._outcome(record, outcome))
+            raise _Stop(await self._outcome(record, outcome))
         if retry:
             interruption = await interruption_showing(self._page, self._artifact.known_interruptions, self._values)
             if interruption is not None:
@@ -605,6 +605,9 @@ class _Replay:
         if unread:
             return await self._failure(last, ExecutionStatus.TECHNICAL_FAIL, "OUTPUT_MISSING", CheckFailed(
                 "every declared output read", f"not read: {', '.join(unread)}"))
+        # The page the run finished on: the one screenshot a successful run gets, so the
+        # report's gallery always shows how it ended, not just how it failed.
+        await self._screenshot(f"success_step{last.step.sequence_index:02d}")
         return self._end(ExecutionStatus.SUCCESS)
 
     async def _final_check(self, kind: GlobalAssertionType, value: str) -> Optional[CheckFailed]:
@@ -620,11 +623,14 @@ class _Replay:
             return CheckFailed(f'"{value}" shown at the end', "not shown")
         return CheckFailed(f"a final check replay supports", f"a {kind.value} check")
 
-    def _outcome(self, record: _StepRecord, outcome: KnownOutcome) -> ExecutionResult:
+    async def _outcome(self, record: _StepRecord, outcome: KnownOutcome) -> ExecutionResult:
         # An answer, not a failure: the step's checks didn't hold because the bank answered.
-        self._trace(record, StepStatus.FAILED, error_message=f"the page shows the known outcome {outcome.code}")
+        screenshot = await self._screenshot(f"outcome_step{record.step.sequence_index:02d}_{outcome.code}")
+        self._trace(record, StepStatus.FAILED, error_message=f"the page shows the known outcome {outcome.code}",
+                   screenshot=screenshot)
         return self._end(ExecutionStatus.BUSINESS_OUTCOME,
-                         outcome=BusinessOutcome(code=outcome.code, description=outcome.description))
+                         outcome=BusinessOutcome(code=outcome.code, description=outcome.description,
+                                                 screenshot_path=screenshot))
 
     async def _failure(self, record: _StepRecord, status: ExecutionStatus, code: str, failed: CheckFailed) -> ExecutionResult:
         step = record.step
@@ -715,7 +721,8 @@ class _Replay:
                screenshot: Optional[str] = None) -> None:
         step = record.step
         self._traces.append(StepExecutionTrace(
-            step_id=step.step_id, sequence_index=step.sequence_index, status=status, safety_tier=step.safety_tier,
+            step_id=step.step_id, sequence_index=step.sequence_index, description=self._clean(step.description),
+            status=status, safety_tier=step.safety_tier,
             attempt_count=max(1, record.attempts), duration_ms=int((time.monotonic() - record.started) * 1000),
             locator_priority=record.priority, recovery_logs=list(record.recoveries),
             failure_screenshot_path=screenshot, error_message=error_message))

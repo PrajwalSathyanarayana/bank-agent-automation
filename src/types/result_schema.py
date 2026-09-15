@@ -53,6 +53,10 @@ class RecoveryAttemptLog(BaseModel):
 class StepExecutionTrace(BaseModel):
     step_id: str = Field(min_length=1)
     sequence_index: int = Field(ge=0)
+    # The artifact's own words for this step (e.g. "Open Bill Pay for this member"), so a
+    # reviewer reads what happened without cross-referencing the artifact separately.
+    # Optional: a result saved before this field existed has none.
+    description: Optional[str] = None
     status: StepStatus
     safety_tier: SafetyTier
     attempt_count: int = Field(gt=0)
@@ -93,6 +97,8 @@ class BusinessOutcome(BaseModel):
 
     code: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
     description: str = Field(min_length=1)
+    # The page showing this answer, when replay could still reach one to screenshot.
+    screenshot_path: Optional[str] = None
 
 
 class FailureDetail(BaseModel):

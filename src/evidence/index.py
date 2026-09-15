@@ -56,8 +56,9 @@ def discover_runs(runs_dir: Path) -> list[RunEntry]:
 
 
 def write_index(evidence_dir: Path) -> tuple[Path, Path]:
-    """Render every listed run's report.html (if it doesn't have one yet), then write
-    evidence_dir/index.html and index.md. Returns the two files written."""
+    """Render every listed run's report.html - always, even one it already has, so a
+    template change (a new legend, a reworded outcome box) reaches every past run too -
+    then write evidence_dir/index.html and index.md. Returns the two files written."""
     runs = discover_runs(evidence_dir / "runs")
     for entry in runs:
         write_report(entry.result, evidence_dir / entry.folder)
