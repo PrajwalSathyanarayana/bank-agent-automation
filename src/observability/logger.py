@@ -23,10 +23,13 @@ def _resolved_settings() -> dict:
 
 
 class RunLogger:
-    """Structured JSON evidence logger, one instance per discovery or
-    replay run. Writes newline-delimited JSON to evidence/{mode}/run_log.json,
-    appending as each event happens (crash-resilient — evidence survives
-    up to the point of a hard failure).
+    """Structured JSON evidence logger, one instance per discovery or replay run.
+
+    Each run gets its own folder, evidence/runs/{date}_{capability}_{mode}_{id}/ (id: the
+    first 8 hex characters of the run's trace_id), holding this run's own log lines
+    (log.json, appended as each event happens — crash-resilient, evidence survives up to
+    the point of a hard failure), its own screenshots/, and, once write_result() is called,
+    its own result.json.
     """
 
     def __init__(self, mode: str, capability: Optional[str] = None):
@@ -42,9 +45,12 @@ class RunLogger:
             env.artifact_signing_key,
         ) if secret is not None)
 
-        log_dir = settings.evidence_dir / mode.lower()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        self.log_path = log_dir / "run_log.json"
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        name = "_".join(part for part in (date, capability, mode.lower(), self.trace_id[:8]) if part)
+        self.run_dir = settings.evidence_dir / "runs" / name
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.run_dir / "log.json"
+        self.screenshots_dir = self.run_dir / "screenshots"
 
         self._logger = logging.getLogger(f"run.{self.trace_id}")
         self._logger.setLevel(logging.INFO)
@@ -313,6 +319,12 @@ class RunLogger:
                 "findings": findings,
             },
         )
+
+    def write_result(self, result_json: str) -> None:
+        """The run's ExecutionResult, saved as result.json beside this run's own log
+        lines and screenshots. Called from inside the engine's own end-of-run code, so
+        every run gets one regardless of which entry point started it."""
+        (self.run_dir / "result.json").write_text(result_json, encoding="utf-8")
 
     def summary_metrics(
         self, duration_ms: int, step_count: int, retry_count: int, human_interventions: int

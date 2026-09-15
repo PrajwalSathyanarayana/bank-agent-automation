@@ -164,7 +164,7 @@ class _Replay:
         self._irreversible_done = False
         # Set once the irreversible step's own checks passed after it: what it led to was seen.
         self._irreversible_confirmed = False
-        self._screenshots = settings.evidence_dir / "replay" / "screenshots"
+        self._screenshots = logger.screenshots_dir
         self._goal = f"Replay {request.capability}"
         self._secrets: list[str] = []
 
@@ -647,7 +647,7 @@ class _Replay:
         summary = self._clean(summarize(self._request.capability, "REPLAY", status, goal=self._goal, inputs=inputs,
                                         outputs=outputs, irreversible_step=state, outcome=outcome, failure=failure,
                                         error=error, person=self._person_end))
-        return ExecutionResult(
+        result = ExecutionResult(
             run_id=self._logger.trace_id,
             capability=self._request.capability,
             artifact_version=self._artifact.metadata.version if self._artifact else None,
@@ -667,6 +667,8 @@ class _Replay:
             failure=failure,
             error=error,
         )
+        self._logger.write_result(result.to_json())
+        return result
 
     # --- helpers ---
 

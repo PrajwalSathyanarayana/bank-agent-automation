@@ -284,7 +284,7 @@ class _Discovery:
         self._asserted_here = False
         self._started = time.monotonic()
         self._start_time = datetime.now(timezone.utc)
-        self._screenshots = settings.evidence_dir / "discovery" / "screenshots"
+        self._screenshots = logger.screenshots_dir
         self._session: Optional[BrowserSession] = None
 
     async def execute(self) -> ExecutionResult:
@@ -663,7 +663,7 @@ class _Discovery:
             irreversible_step=self._irreversible_step, error=error,
             escalation=handoff.trigger_reason if handoff else None, version=artifact_version,
             person=self._person_end))
-        return ExecutionResult(
+        result = ExecutionResult(
             # The run log's trace id, so a result leads straight to its log lines.
             run_id=self._logger.trace_id,
             capability=self._contract.capability,
@@ -680,6 +680,8 @@ class _Discovery:
             terminal_outputs=outputs,
             error=error,
         )
+        self._logger.write_result(result.to_json())
+        return result
 
     def _unread_outputs(self) -> list[str]:
         return [output.key for output in self._contract.output_definitions if output.key not in self._outputs]

@@ -492,6 +492,12 @@ async def test_a_replay_pays_the_bill_and_returns_both_balances(saved_bill_pay, 
     assert result.summary == (f"Paid $50.00 to Sunbelt Electric Co for member 10234. Checking balance "
                               f"${_amount(outputs['checking_balance_before']):,.2f} before, "
                               f"${_amount(outputs['new_checking_balance']):,.2f} after.")
+    # The run's own evidence folder: its log, its result, and (this run had none) an empty
+    # screenshots folder all sit together, not in a shared bucket with every other run.
+    result_path = replay_logger.run_dir / "result.json"
+    assert result_path.exists() and result_path.read_text(encoding="utf-8") == result.to_json()
+    assert replay_logger.log_path.parent == replay_logger.run_dir
+    assert result.evidence_paths.screenshots_dir == str(replay_logger.screenshots_dir)
 
 
 @pytest.mark.anyio

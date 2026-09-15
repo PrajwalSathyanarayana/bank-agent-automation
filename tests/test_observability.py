@@ -21,11 +21,28 @@ def _read_lines(log_path):
         return [json.loads(line) for line in f if line.strip()]
 
 
-def test_run_logger_creates_log_file_under_evidence_mode_dir(tmp_path, monkeypatch):
+def test_run_logger_creates_a_folder_of_its_own_under_evidence_runs(tmp_path, monkeypatch):
     logger = _make_logger(tmp_path, monkeypatch, mode="DISCOVERY")
     logger.execution_started(goal="look up member balance")
-    assert logger.log_path == tmp_path / "discovery" / "run_log.json"
+    assert logger.run_dir.parent == tmp_path / "runs"
+    assert logger.run_dir.name.endswith(f"member_servicing_and_bill_pay_discovery_{logger.trace_id[:8]}")
+    assert logger.log_path == logger.run_dir / "log.json"
     assert logger.log_path.exists()
+
+
+def test_two_runs_in_the_same_mode_and_capability_get_different_folders(tmp_path, monkeypatch):
+    logger_a = _make_logger(tmp_path, monkeypatch)
+    logger_b = _make_logger(tmp_path, monkeypatch)
+    assert logger_a.run_dir != logger_b.run_dir
+
+
+def test_write_result_saves_result_json_beside_the_runs_own_log(tmp_path, monkeypatch):
+    logger = _make_logger(tmp_path, monkeypatch)
+    logger.write_result('{"status": "SUCCESS"}')
+    result_path = logger.run_dir / "result.json"
+    assert result_path.exists()
+    assert result_path.read_text(encoding="utf-8") == '{"status": "SUCCESS"}'
+    assert logger.screenshots_dir == logger.run_dir / "screenshots"
 
 
 def test_each_call_appends_one_line(tmp_path, monkeypatch):

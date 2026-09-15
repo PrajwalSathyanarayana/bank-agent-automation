@@ -214,7 +214,7 @@ async def _shows(page: Page, phrase: str) -> bool:
 
 
 async def _screenshot(page: Page, logger: RunLogger, number: int, code: str) -> Optional[str]:
-    folder = settings.evidence_dir / "replay" / "screenshots"
+    folder = logger.screenshots_dir
     path = folder / f"{logger.trace_id}_recovery{number:02d}_{code}.png"
     try:
         folder.mkdir(parents=True, exist_ok=True)

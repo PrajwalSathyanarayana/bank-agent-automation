@@ -2906,6 +2906,10 @@ async def test_discovery_records_the_flow_and_stops_before_the_irreversible_step
     events = [line["event_type"] for line in _log_lines(run_logger)]
     assert events[0] == "EXECUTION_STARTED" and events[-2:] == ["EXECUTION_ENDED", "SUMMARY_METRICS"]
     assert env.mock_bank_password.get_secret_value() not in run_logger.log_path.read_text(encoding="utf-8")
+    # This run's own evidence folder holds its log and its result, not a shared bucket.
+    result_path = run_logger.run_dir / "result.json"
+    assert result_path.exists() and result_path.read_text(encoding="utf-8") == result.to_json()
+    assert run_logger.log_path.parent == run_logger.run_dir
 
 
 @pytest.mark.anyio
