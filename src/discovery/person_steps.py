@@ -13,6 +13,7 @@ A click that clears one of the contract's declared interruptions (the promotion'
 goes through but isn't recorded, as the agent's closing of an overlay isn't: it may not
 appear on the next run, and replay clears it by itself whenever it does.
 """
+import asyncio
 from typing import Optional, Sequence
 
 from playwright.async_api import ElementHandle, Frame
@@ -35,6 +36,8 @@ from src.types.placeholders import CREDENTIAL_PREFIX
 from src.types.step_schema import ActionType, SafetyTier
 
 BY_A_PERSON = "(done by a person)"
+# How long, after the person answers the bank's box, the page has to start moving on.
+_AFTER_A_BOX_S = 5.0
 NOT_RECORDABLE = "That can't be recorded as a step, so it wasn't done; use a button, link or field on the page."
 OFF_LIMITS = "That leads outside the pages this task may use, so it wasn't followed."
 
@@ -86,23 +89,32 @@ class PersonStepRecorder:
             return OFF_LIMITS
 
         boxes_before = self._session.dialogs_for_person
-        navigated: list[str] = []
+        navigated = asyncio.Event()
 
         def on_navigated(frame: Frame) -> None:
             if frame.parent_frame is None:
-                navigated.append(frame.url)
+                navigated.set()
 
         page.on("framenavigated", on_navigated)
         try:
             await let_through(element)
             # A confirm box the bank opens waits for the person, and the click waits with it.
             await click(element, timeout_ms=settings.operator_timeout_ms)
+            boxed = self._session.dialogs_for_person > boxes_before
+            if boxed:
+                # After a box, the page moves on only once the person has answered it, so the
+                # old page still counts as loaded: wait for the move first (a cancelled box
+                # leads nowhere).
+                try:
+                    await asyncio.wait_for(navigated.wait(), timeout=_AFTER_A_BOX_S)
+                except asyncio.TimeoutError:
+                    pass
             await page.wait_for_load_state("load", timeout=settings.discovery_page_action_timeout_ms)
         except (ActionFailed, PlaywrightTimeoutError) as failure:
             return f"That click didn't go through ({str(failure).splitlines()[0]}); try again."
         finally:
             page.remove_listener("framenavigated", on_navigated)
-        if self._session.dialogs_for_person > boxes_before and not navigated:
+        if boxed and not navigated.is_set():
             # The person cancelled the bank's box: nothing happened, so nothing is recorded.
             return None
         if not self._allowed(page.url):

@@ -2787,6 +2787,9 @@ async def test_a_payment_the_person_cancels_is_not_recorded_and_one_they_confirm
         assert (paid.action, paid.safety_tier, person.irreversible_done) == (
             ActionType.CLICK, SafetyTier.IRREVERSIBLE, True)
         assert "Payment Submitted Successfully" in await page.inner_text("body")
+        # Its checks describe the receipt the click led to, title included: the page was
+        # read only once it had moved on after the person's OK.
+        assert "page_title" in [check.type.value for check in paid.checkpoints]
 
 
 # --- agent: the discovery loop, driven by a scripted model (no API calls) ---
