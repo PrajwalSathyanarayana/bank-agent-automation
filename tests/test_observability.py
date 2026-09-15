@@ -5,7 +5,8 @@ import pytest
 from src.config import settings as settings_module
 from src.config.env import env
 from src.observability.logger import RunLogger
-from src.observability.summary import readable_money, summarize
+from src.observability.summary import readable_money, readable_values, summarize
+from src.types.artifact_schema import CompareAs, ConfirmationCheck, OutputParamDefinition, OutputType
 from src.types.result_schema import BusinessOutcome, ErrorDetail, ExecutionStatus, FailureDetail
 
 
@@ -261,3 +262,24 @@ def test_a_capability_without_its_own_wording_is_summarised_from_its_goal():
 )
 def test_amounts_are_shown_the_way_people_write_them(value, currency, shown):
     assert readable_money(value, currency) == shown
+
+
+@pytest.mark.parametrize(
+    "code, reason",
+    [pytest.param("STUCK_NO_PROGRESS", "the learning agent got stuck", id="a stuck learning agent"),
+     pytest.param("SECRET_LITERAL", "the learned procedure would have kept data it must not store",
+                  id="the save-time scan refusing run data")],
+)
+def test_families_of_codes_read_alike(code, reason):
+    assert _summary(ExecutionStatus.HARD_ABORT, error=ErrorDetail(code=code, message=code)) == (
+        f"{ASKED_LINE} Stopped: {reason} ({code}).")
+
+
+def test_values_are_shown_as_money_only_where_the_contract_says_money():
+    checks = [ConfirmationCheck(label="Amount:", input_key="amount", compare_as=CompareAs.MONEY, currency="USD")]
+    definitions = [OutputParamDefinition(key="balance", type=OutputType.MONEY, description="Balance", currency="USD"),
+                   OutputParamDefinition(key="count", type=OutputType.NUMBER, description="Count")]
+    inputs, outputs = readable_values({"member_id": "10234", "amount": 1050.0, "copies": 2.0},
+                                      {"balance": "2450.32", "count": 3}, checks, definitions)
+    assert inputs == {"member_id": "10234", "amount": "$1,050.00", "copies": "2"}
+    assert outputs == {"balance": "$2,450.32", "count": "3"}

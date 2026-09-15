@@ -26,6 +26,7 @@ from src.config.settings import settings
 from src.locating.checks import element_wording, is_password_box, text_pattern, value_beside, visible_text
 from src.locating.values import UnreadableValue, read_output
 from src.observability.logger import RunLogger
+from src.observability.summary import readable_values, summarize
 from src.replay.checks import CheckFailed, CheckValues, verify_shown_text, verify_step_checks
 from src.replay.locator_resolver import Found, NotFound, find_element
 from src.replay.recovery_engine import Recoveries, interruption_showing, missing_option, outcome_showing, recover
@@ -127,6 +128,8 @@ class _Replay:
         self._outputs: dict[str, Union[str, int, float]] = {}
         self._recoveries = Recoveries()
         self._irreversible_done = False
+        # Set once the irreversible step's own checks passed after it: what it led to was seen.
+        self._irreversible_confirmed = False
         self._screenshots = settings.evidence_dir / "replay" / "screenshots"
         self._goal = f"Replay {request.capability}"
         self._secrets: list[str] = []
@@ -175,6 +178,8 @@ class _Replay:
             await self._act(record)
         await self._verify(record, next_step)
         self._trace(record, StepStatus.RECOVERED if record.recoveries else StepStatus.PASSED)
+        if step.safety_tier == SafetyTier.IRREVERSIBLE:
+            self._irreversible_confirmed = True
 
     # --- before the run: the artifact, the inputs, the credentials ---
 
@@ -460,12 +465,21 @@ class _Replay:
         self._logger.execution_ended(status.value, code, error.message if error else None)
         retries = sum(max(0, trace.attempt_count - 1) for trace in self._traces)
         self._logger.summary_metrics(duration_ms, len(self._traces), retries, 0)
+        state = self._irreversible_state()
+        inputs, outputs = readable_values(self._request.inputs, self._outputs,
+                                          self._artifact.confirmation_checks if self._artifact else [],
+                                          self._artifact.output_definitions if self._artifact else [])
+        summary = self._clean(summarize(self._request.capability, "REPLAY", status, goal=self._goal, inputs=inputs,
+                                        outputs=outputs, irreversible_step=state, outcome=outcome, failure=failure,
+                                        error=error))
         return ExecutionResult(
             run_id=self._logger.trace_id,
             capability=self._request.capability,
             artifact_version=self._artifact.metadata.version if self._artifact else None,
             mode="REPLAY",
             status=status,
+            summary=summary,
+            irreversible_step=state,
             start_time=self._start_time,
             end_time=datetime.now(timezone.utc),
             duration_ms=duration_ms,
@@ -484,6 +498,17 @@ class _Replay:
     @property
     def _page(self) -> Page:
         return self._session.page
+
+    def _irreversible_state(self) -> Optional[str]:
+        """Whether the irreversible step happened: not reached, completed (clicked and what it
+        led to was checked), or unknown (clicked, then the run stopped before seeing what
+        followed). None when the capability has no such step."""
+        if self._artifact is None or not any(s.safety_tier == SafetyTier.IRREVERSIBLE for s in self._artifact.steps):
+            return None
+        if not self._irreversible_done:
+            return "not_reached"
+        return "completed" if self._irreversible_confirmed else "unknown"
+
 
     def _trace(self, record: _StepRecord, status: StepStatus, *, error_message: Optional[str] = None,
                screenshot: Optional[str] = None) -> None:

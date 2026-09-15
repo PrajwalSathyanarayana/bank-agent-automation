@@ -406,15 +406,17 @@ def test_the_relabelled_menu_switch_changes_only_the_menu_wording():
 
 
 def test_the_slow_pages_switch_delays_pages_but_not_stylesheets():
+    # perf_counter, not monotonic: on Windows monotonic ticks in ~16 ms steps, so a 300 ms
+    # wait can read as 297 ms. The margin keeps the test about the switch, not the clock.
     client = create_app(slow_pages_ms=300).test_client()
-    started = time.monotonic()
+    started = time.perf_counter()
     client.get("/static/css/legacy.css")
-    stylesheet_s = time.monotonic() - started
-    started = time.monotonic()
+    stylesheet_s = time.perf_counter() - started
+    started = time.perf_counter()
     client.get("/login")
-    page_s = time.monotonic() - started
-    assert page_s >= 0.3
-    assert stylesheet_s < 0.3
+    page_s = time.perf_counter() - started
+    assert page_s >= 0.25
+    assert stylesheet_s < 0.25
 
 
 def test_the_bank_names_the_switches_it_runs_with():

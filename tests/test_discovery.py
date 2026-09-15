@@ -2650,6 +2650,9 @@ async def test_discovery_records_the_flow_and_stops_before_the_irreversible_step
     assert artifact.steps[-1].safety_tier == SafetyTier.IRREVERSIBLE
     assert [step.input_value for step in artifact.steps if step.action == ActionType.TYPE] == [
         "{credential:bank_username}", "{credential:bank_password}", "{member_id}", "{amount}"]
+    assert result.irreversible_step == "not_reached"
+    assert result.summary.endswith("A person needs to decide: the task was learned up to the final confirmation, "
+                                   "which a person must make. No payment was made. Learned and saved as version 1.0.0.")
     events = [line["event_type"] for line in _log_lines(run_logger)]
     assert events[0] == "EXECUTION_STARTED" and events[-2:] == ["EXECUTION_ENDED", "SUMMARY_METRICS"]
     assert env.mock_bank_password.get_secret_value() not in run_logger.log_path.read_text(encoding="utf-8")
@@ -2880,6 +2883,8 @@ async def test_the_goal_cant_be_marked_complete_until_every_declared_value_is_re
     assert answer["is_error"] is True
     assert "checking_balance_before" in answer["content"]
     assert result.error.code == "STUCK_NO_PROGRESS"
+    assert result.irreversible_step is None  # no irreversible step was ever met
+    assert result.summary.endswith("Stopped: the learning agent got stuck (STUCK_NO_PROGRESS).")
 
 
 @pytest.mark.anyio
@@ -3018,6 +3023,8 @@ async def test_a_confirm_screen_that_doesnt_match_the_request_is_not_confirmed(d
     assert (check["authorized"], check["code"]) == (False, "AUTHORIZATION_MISMATCH")
     assert "IRREVERSIBLE_EXECUTED" not in [line["event_type"] for line in lines]
     assert result.error.code == "STUCK_NO_PROGRESS"
+    assert result.irreversible_step == "not_reached"
+    assert result.summary.endswith("No payment was made.")
 
 
 # Kept last in the file: these tests really pay in the shared test bank, which changes the
@@ -3066,3 +3073,5 @@ async def test_in_a_sandbox_the_payment_is_confirmed_once_the_screen_matches_the
     assert (check["authorized"], check["code"], check["problems"]) == (True, None, [])
     events = [line["event_type"] for line in lines]
     assert events.index("AUTHORIZATION_CHECKED") < events.index("IRREVERSIBLE_EXECUTED")
+    assert result.irreversible_step == "completed"
+    assert result.summary == "Paid $50.00 to Sunbelt Electric Co for member 10234. Learned and saved as version 1.0.0."

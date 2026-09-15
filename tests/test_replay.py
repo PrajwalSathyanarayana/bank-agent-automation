@@ -368,7 +368,8 @@ def _label_cell(label) -> Locator:
                    priority=0)
 
 
-def _bill_pay_steps(search_locators=None, sign_in_lands_on="/dashboard") -> list[Step]:
+def _bill_pay_steps(search_locators=None, sign_in_lands_on="/dashboard",
+                    confirm_lands_on="/billpay/confirm") -> list[Step]:
     risky, irreversible = SafetyTier.RISKY, SafetyTier.IRREVERSIBLE
     return [
         Step(sequence_index=0, action=ActionType.NAVIGATE, description="Open the start page",
@@ -397,7 +398,7 @@ def _bill_pay_steps(search_locators=None, sign_in_lands_on="/dashboard") -> list
         Step(sequence_index=11, action=ActionType.CLICK, description="Continue", safety_tier=risky,
              locators=[_css("input[value='Continue']")], checkpoints=[_path("/billpay/confirm"), NEXT]),
         Step(sequence_index=12, action=ActionType.CLICK, description="Confirm the payment", safety_tier=irreversible,
-             locators=[_css("input[value='Confirm Payment']")], checkpoints=[_path("/billpay/confirm"), NEXT]),
+             locators=[_css("input[value='Confirm Payment']")], checkpoints=[_path(confirm_lands_on), NEXT]),
         Step(sequence_index=13, action=ActionType.EXTRACT_TEXT, description="Read the new balance",
              output_key="new_checking_balance", locators=[_label_cell("New Checking Balance:")], checkpoints=[NEXT]),
         Step(sequence_index=14, action=ActionType.ASSERT_TEXT, description="Check the receipt",
@@ -443,6 +444,10 @@ def _amount(text) -> Decimal:
     return Decimal(text)
 
 
+def _lower_first(text: str) -> str:
+    return text[0].lower() + text[1:]
+
+
 @pytest.mark.anyio
 async def test_a_replay_pays_the_bill_and_returns_both_balances(saved_bill_pay, dashboard_popup, replay_logger):
     dashboard_popup(False)
@@ -455,6 +460,10 @@ async def test_a_replay_pays_the_bill_and_returns_both_balances(saved_bill_pay, 
     assert [trace.status for trace in result.step_traces] == [StepStatus.PASSED] * 15
     [check] = [line for line in _log_lines(replay_logger) if line["event_type"] == "AUTHORIZATION_CHECKED"]
     assert check["authorized"] is True
+    assert result.irreversible_step == "completed"
+    assert result.summary == (f"Paid $50.00 to Sunbelt Electric Co for member 10234. Checking balance "
+                              f"${_amount(outputs['checking_balance_before']):,.2f} before, "
+                              f"${_amount(outputs['new_checking_balance']):,.2f} after.")
 
 
 @pytest.mark.anyio
@@ -487,6 +496,8 @@ async def test_each_known_outcome_is_an_answer_not_a_failure(saved_bill_pay, das
     assert result.outcome.code == code
     assert (result.error, result.failure) == (None, None)
     assert "new_checking_balance" not in (result.terminal_outputs or {})
+    assert result.irreversible_step == "not_reached"
+    assert result.summary.endswith(f"Not done: {_lower_first(result.outcome.description)}. No payment was made.")
 
 
 @pytest.mark.anyio
@@ -531,6 +542,9 @@ async def test_a_payment_over_the_limit_goes_to_a_person_and_isnt_made(saved_bil
     assert (result.failure.step_index, result.handoff_events[0].trigger_reason) == (12, "OVER_AUTO_LIMIT")
     assert result.failure.expected == "Amount: at most 10.00 USD"
     assert "new_checking_balance" not in result.terminal_outputs
+    assert result.irreversible_step == "not_reached"
+    assert result.summary == ("Pay $50.00 to Sunbelt Electric Co for member 10234. A person needs to decide: the "
+                              "amount is above the bank's limit for automatic payments. No payment was made.")
 
 
 @pytest.mark.anyio
@@ -567,6 +581,23 @@ async def test_a_hand_edited_artifact_is_refused_before_any_browser_opens(saved_
     result = await _replay(replay_logger)
     assert (result.status, result.error.code) == (ExecutionStatus.HARD_ABORT, "INTEGRITY_CHECK_FAILED")
     assert result.integrity_verified is False
+    assert result.irreversible_step is None  # the artifact was never trusted, so nothing is known about it
+    assert result.summary.endswith("Stopped: the saved procedure failed its security check (INTEGRITY_CHECK_FAILED).")
+
+
+@pytest.mark.anyio
+async def test_a_run_that_stops_after_the_payment_click_says_it_may_have_gone_through(saved_bill_pay,
+                                                                                    dashboard_popup,
+                                                                                    replay_logger):
+    # The page after Confirm Payment isn't the one the artifact expects, so what followed the
+    # click is never confirmed: the payment may or may not have gone through.
+    dashboard_popup(False)
+    saved_bill_pay(_bill_pay_steps(confirm_lands_on="/elsewhere"))
+    result = await _replay(replay_logger, member="40412", payee="Horizon Credit Card Services", amount=5.0)
+    assert (result.status, result.error.code, result.failure.step_index) == (
+        ExecutionStatus.TECHNICAL_FAIL, "CHECK_FAILED", 12)
+    assert result.irreversible_step == "unknown"
+    assert result.summary.endswith("The payment may have gone through: check before trying again.")
 
 
 @pytest.mark.anyio

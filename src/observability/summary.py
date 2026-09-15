@@ -6,11 +6,12 @@ invents anything. The wording is presentation, not behaviour: it lives here, out
 signed artifact, so it can be improved without re-signing anything. A capability without
 its own wording is summarised from its goal sentence.
 """
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
+from src.types.artifact_schema import CompareAs, ConfirmationCheck, OutputParamDefinition, OutputType
 from src.types.placeholders import MissingValue, fill_text
 from src.types.result_schema import BusinessOutcome, ErrorDetail, ExecutionStatus, FailureDetail
 
@@ -59,7 +60,14 @@ REASONS = {
     "SANDBOX_NOT_LOCAL": "the test environment isn't on this machine",
     "MAX_STEPS": "it took more steps than allowed",
     "ARTIFACT_INVALID": "the learned procedure couldn't be saved",
+    "MODEL_REFUSED": "the model declined to continue",
+    "MODEL_UNAVAILABLE": "the model couldn't be reached",
+    "MODEL_REQUEST_REJECTED": "the model couldn't take the request",
 }
+# Families of codes that read alike: the learning agent getting stuck, and the save-time
+# scan refusing to store this run's data.
+FAMILIES = {"STUCK_": "the learning agent got stuck",
+            "_LITERAL": "the learned procedure would have kept data it must not store"}
 # Why a person is needed, in plain words.
 ESCALATIONS = {
     "OVER_AUTO_LIMIT": "the amount is above the bank's limit for automatic payments",
@@ -102,12 +110,35 @@ def summarize(
     else:
         code = error.code if error else "UNKNOWN"
         where = f" at step {failure.step_index} ({failure.step_description.rstrip('.')})" if failure else ""
-        parts += [asked, f"Stopped{where}: {REASONS.get(code, 'an internal check stopped it')} ({code})."]
+        parts += [asked, f"Stopped{where}: {_reason(code)} ({code})."]
     if status != ExecutionStatus.SUCCESS or irreversible_step != "completed":
         parts.append(_irreversible_sentence(action, irreversible_step))
     if mode == "DISCOVERY" and version:
         parts.append(f"Learned and saved as version {version}.")
     return " ".join(part for part in parts if part)
+
+
+def readable_values(
+    inputs: Mapping[str, object],
+    outputs: Mapping[str, object],
+    checks: Sequence[ConfirmationCheck],
+    definitions: Sequence[OutputParamDefinition],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """This run's inputs and read values as a person reads them. An input a money payment
+    check compares is money ($50.00); so is a money output ($2,450.32)."""
+    money_inputs = {check.input_key: check.currency or "" for check in checks if check.compare_as == CompareAs.MONEY}
+    shown_inputs = {}
+    for key, value in inputs.items():
+        if key in money_inputs:
+            shown_inputs[key] = readable_money(value, money_inputs[key])
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            shown_inputs[key] = format(Decimal(str(value)).normalize(), "f")
+        else:
+            shown_inputs[key] = str(value)
+    money_outputs = {d.key: d.currency or "" for d in definitions if d.type == OutputType.MONEY}
+    shown_outputs = {key: readable_money(value, money_outputs[key]) if key in money_outputs else str(value)
+                     for key, value in outputs.items()}
+    return shown_inputs, shown_outputs
 
 
 def readable_money(value: object, currency: str) -> str:
@@ -118,6 +149,15 @@ def readable_money(value: object, currency: str) -> str:
         return str(value)
     symbol = _SYMBOLS.get(currency)
     return f"{symbol}{amount:,.2f}" if symbol else f"{amount:,.2f} {currency}"
+
+
+def _reason(code: str) -> str:
+    if code in REASONS:
+        return REASONS[code]
+    for part, reason in FAMILIES.items():
+        if code.startswith(part) or code.endswith(part):
+            return reason
+    return "an internal check stopped it"
 
 
 def _irreversible_sentence(action: str, state: Optional[str]) -> str:

@@ -46,6 +46,7 @@ from src.discovery.prompts import (
 )
 from src.discovery.recorder import Action, AssertionRefused, ExtractionRefused, Recorder, TypingRefused
 from src.observability.logger import RunLogger
+from src.observability.summary import readable_values, summarize
 from src.safety.allowlist import AllowlistViolation, check_domain, check_route, enforce_safety
 from src.safety.authorization import MISMATCH, authorize
 from src.safety.redactor import redact_text, scrub_known_values
@@ -226,6 +227,9 @@ class _Discovery:
         number_inputs = {key: float(value) for key, value in request.input_values.items() if key in number_keys}
         # The run's inputs as the caller gave them: what the payment check compares the screen with.
         self._input_values = dict(request.input_values)
+        # Whether an irreversible step happened: None until one is met; "unknown" from the
+        # moment it is clicked until what follows is recorded.
+        self._irreversible_step: Optional[str] = None
         config_keys = [c.key for c in contract.credentials if c.kind == CredentialKind.CONFIG]
         self._username_key = config_keys[0] if config_keys else ""
         self._run = RunValues(
@@ -446,16 +450,20 @@ class _Discovery:
                 return _Next(outputs_first(self._unread_outputs()), call_id, is_error=True)
             # Recorded from the screen, never performed: the run stops here for a person.
             await self._recorder.commit(step, self._page, self._run, derived=derived, acted=False)
+            self._irreversible_step = "not_reached"
             return self._save(ExecutionStatus.HUMAN_ESCALATED)
         if irreversible:
             refusal = await self._confirmation_refusal()
             if refusal is not None:
                 # Not clicked and not recorded: the model can go back and put it right.
+                self._irreversible_step = self._irreversible_step or "not_reached"
                 return _Next(refusal, call_id, is_error=True)
             # A test environment: the step is performed, so what follows it (the receipt,
             # values that exist only afterwards) is learned too. Its dialog is accepted.
             self._logger.irreversible_executed(step.sequence_index)
             self._session.accepting_dialogs = True
+            # From here it may have happened, even if the click seems to fail.
+            self._irreversible_step = "unknown"
 
         try:
             await self._perform(kind, element, value)
@@ -469,6 +477,8 @@ class _Discovery:
             await self._page.go_back()
             return self._violation(call_id)
         await self._recorder.commit(step, self._page, self._run, derived=derived)
+        if irreversible:
+            self._irreversible_step = "completed"
         if kind == ActionType.CLICK:
             self._asserted_here = False
         done = "Done: this irreversible step was performed (test environment)." if irreversible else "Done."
@@ -553,6 +563,12 @@ class _Discovery:
         self._logger.run_usage(**self._usage, estimated_cost_usd=estimated_cost_usd(env.anthropic_model, self._usage))
         self._logger.execution_ended(status.value, error.code if error else None, error.message if error else None)
         self._logger.summary_metrics(duration_ms, len(self._recorder.steps), self._retries, 0)
+        inputs, shown_outputs = readable_values(self._input_values, outputs or {}, self._contract.confirmation_checks,
+                                                self._contract.output_definitions)
+        summary = self._clean(summarize(
+            self._contract.capability, "DISCOVERY", status, goal=self._goal, inputs=inputs, outputs=shown_outputs,
+            irreversible_step=self._irreversible_step, error=error,
+            escalation=handoff.trigger_reason if handoff else None, version=artifact_version))
         return ExecutionResult(
             # The run log's trace id, so a result leads straight to its log lines.
             run_id=self._logger.trace_id,
@@ -560,6 +576,8 @@ class _Discovery:
             artifact_version=artifact_version,
             mode="DISCOVERY",
             status=status,
+            summary=summary,
+            irreversible_step=self._irreversible_step,
             start_time=self._start_time,
             end_time=datetime.now(timezone.utc),
             duration_ms=duration_ms,
