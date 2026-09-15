@@ -102,8 +102,46 @@ def dismiss_dialogs(
     return notes
 
 
-async def click(element: ElementHandle, *, timeout_ms: int) -> None:
+# A small dot, added once per document load (BrowserSession injects this as an init script,
+# only for a session someone can watch); moved to an element's centre just before an action
+# so a person following a --headed run can see where the automation is about to act.
+POINTER_INIT_SCRIPT = """
+(() => {
+  const dot = document.createElement('div');
+  dot.id = '__automation_pointer';
+  dot.style.cssText = 'position:fixed;width:18px;height:18px;border-radius:50%;' +
+    'background:rgba(255,0,80,.55);border:2px solid #ff0050;z-index:2147483647;' +
+    'pointer-events:none;transition:left .12s ease,top .12s ease;left:-100px;top:-100px;';
+  const attach = () => document.documentElement.appendChild(dot);
+  if (document.documentElement) attach();
+  else document.addEventListener('DOMContentLoaded', attach);
+})();
+"""
+
+
+async def _move_pointer(element: ElementHandle, page: Optional[Page]) -> None:
+    """Move the visible-pointer overlay to this element's centre and pause briefly so it can
+    be seen arriving. page is None for a session nobody can watch (BrowserSession.pointer_page)
+    - checked first, so a headless run never pays for the bounding-box round trip this needs.
+    Never raises: a missing box, a closed page, anything - the action itself still happens."""
+    if page is None:
+        return
+    try:
+        box = await element.bounding_box()
+        if box is None:
+            return
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        await page.evaluate(
+            "([x, y]) => { const d = document.getElementById('__automation_pointer'); "
+            "if (d) { d.style.left = (x - 9) + 'px'; d.style.top = (y - 9) + 'px'; } }", [x, y])
+        await page.wait_for_timeout(150)
+    except PlaywrightError:
+        pass
+
+
+async def click(element: ElementHandle, *, timeout_ms: int, page: Optional[Page] = None) -> None:
     """Click the element. A failure keeps Playwright's reason, e.g. another element on top."""
+    await _move_pointer(element, page)
     try:
         await element.click(timeout=timeout_ms)
     except PlaywrightError as error:
@@ -113,7 +151,7 @@ async def click(element: ElementHandle, *, timeout_ms: int) -> None:
 
 async def type_text(
     element: ElementHandle, text: str, values: Mapping[str, PlaceholderValue], *, timeout_ms: int,
-    tracing: Any = None,
+    tracing: Any = None, page: Optional[Page] = None,
 ) -> None:
     """Type the text into the element, its placeholders filled at the last moment.
 
@@ -124,6 +162,7 @@ async def type_text(
     screenshot, no network - not redacted after the fact), resumed straight after, win or
     lose. A failure becomes ActionFailed with a fixed message and nothing attached.
     """
+    await _move_pointer(element, page)
     has_secret = any(isinstance(values.get(name), SecretStr) for name, _, _ in iter_placeholders(text))
     fill = _guarded(element.fill(fill_text(text, _unwrapped(text, values)), timeout=timeout_ms),
                     "typing into the element failed")
@@ -138,9 +177,11 @@ async def type_text(
 
 
 async def select_option(
-    element: ElementHandle, label: str, values: Mapping[str, PlaceholderValue], *, timeout_ms: int
+    element: ElementHandle, label: str, values: Mapping[str, PlaceholderValue], *, timeout_ms: int,
+    page: Optional[Page] = None,
 ) -> None:
     """Choose the option with this visible label, its placeholders filled ({payee_name})."""
+    await _move_pointer(element, page)
     await _guarded(element.select_option(label=fill_text(label, _unwrapped(label, values)), timeout=timeout_ms),
                    "choosing the option failed")
 
@@ -191,6 +232,13 @@ class BrowserSession:
         """This session's context.tracing object, when it traces itself; None otherwise.
         type_text pauses it around a secret's real keystroke."""
         return self._tracing
+
+    @property
+    def pointer_page(self) -> Optional[Page]:
+        """This session's page, for the visible-pointer overlay, only when someone can
+        watch it (not headless); None otherwise, so click/type_text/select_option skip
+        the overlay with no browser round trip at all."""
+        return self.page if not self._headless else None
 
     @property
     def dialogs_for_person(self) -> int:
@@ -250,6 +298,9 @@ class BrowserSession:
                 await context.tracing.start(screenshots=True, snapshots=True)
                 await context.tracing.start_chunk()
                 self._tracing = context.tracing
+            if not self._headless:
+                # Re-added by Playwright on every new document, so it survives navigation.
+                await context.add_init_script(POINTER_INIT_SCRIPT)
             self.page = await context.new_page()
         except BaseException:
             await self._close()

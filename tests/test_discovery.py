@@ -19,9 +19,11 @@ from pydantic import SecretStr
 from src.config.env import configured_credentials, env
 from src.config.settings import settings
 from src.surface.browser import (
+    POINTER_INIT_SCRIPT,
     ActionFailed,
     BrowserSession,
     action_timeout_ms,
+    click,
     dismiss_dialogs,
     launch_args,
     number_text,
@@ -2617,6 +2619,42 @@ async def test_a_session_that_doesnt_trace_has_nothing_to_save(mock_bank_url, ru
     async with BrowserSession(run_logger) as session:
         assert session.tracing is None
     assert run_logger.trace_path is None
+
+
+def test_pointer_page_is_none_by_default_headless(run_logger):
+    session = BrowserSession(run_logger)
+    session.page = object()  # a session's own page, without ever opening a real browser
+    assert session.pointer_page is None
+
+
+def test_pointer_page_is_the_page_when_not_headless(run_logger):
+    session = BrowserSession(run_logger, headless=False)
+    session.page = object()
+    assert session.pointer_page is session.page
+
+
+@pytest.mark.anyio
+async def test_the_pointer_moves_to_the_acted_on_elements_centre(page):
+    # set_content first: it replaces the whole document, which would otherwise wipe out
+    # a pointer added beforehand (add_init_script re-adds it on every real navigation;
+    # here the script is run directly, once, against the content already in place).
+    await page.set_content('<button style="position:absolute;left:120px;top:60px;'
+                           'width:40px;height:20px;">Go</button>')
+    await page.evaluate(POINTER_INIT_SCRIPT)
+    button = await page.query_selector("button")
+    await click(button, timeout_ms=5_000, page=page)
+    left = await page.eval_on_selector("#__automation_pointer", "el => el.style.left")
+    top = await page.eval_on_selector("#__automation_pointer", "el => el.style.top")
+    assert left not in ("-100px", "") and top not in ("-100px", "")
+
+
+@pytest.mark.anyio
+async def test_without_a_page_the_pointer_adds_no_delay(page):
+    await page.set_content("<button>Go</button>")
+    button = await page.query_selector("button")
+    started = time.monotonic()
+    await click(button, timeout_ms=5_000)  # page defaults to None
+    assert time.monotonic() - started < 0.1
 
 
 @pytest.mark.anyio

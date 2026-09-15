@@ -565,13 +565,14 @@ class _Discovery:
     async def _perform(self, kind: ActionType, element: PageElement, value: Optional[str]) -> None:
         timeout_ms = action_timeout_ms(self._time_left_ms())
         if kind == ActionType.CLICK:
-            await click(element.handle, timeout_ms=timeout_ms)
+            await click(element.handle, timeout_ms=timeout_ms, page=self._session.pointer_page)
             await self._page.wait_for_load_state("load", timeout=timeout_ms)
         elif kind == ActionType.TYPE:
             await type_text(element.handle, value or "", self._values, timeout_ms=timeout_ms,
-                            tracing=self._session.tracing)
+                            tracing=self._session.tracing, page=self._session.pointer_page)
         else:
-            await select_option(element.handle, value or "", self._values, timeout_ms=timeout_ms)
+            await select_option(element.handle, value or "", self._values, timeout_ms=timeout_ms,
+                                page=self._session.pointer_page)
 
     async def _dismiss(self, step: Step, element: PageElement, reason: str, call_id: str) -> Union[_Next, ExecutionResult]:
         # Closing an overlay is never recorded: it may not appear on the next run, and
@@ -580,7 +581,7 @@ class _Discovery:
             return _Next(_NOT_AN_OVERLAY, call_id, is_error=True)
         timeout_ms = action_timeout_ms(self._time_left_ms())
         try:
-            await click(element.handle, timeout_ms=timeout_ms)
+            await click(element.handle, timeout_ms=timeout_ms, page=self._session.pointer_page)
             await self._page.wait_for_load_state("load", timeout=timeout_ms)
         except ActionFailed as failed:
             return _Next(f"Failed: {failed}.", call_id, is_error=True)

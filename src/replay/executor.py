@@ -394,15 +394,16 @@ class _Replay:
                     raise _Stop(await self._failure(record, ExecutionStatus.HARD_ABORT, "TYPING_REFUSED",
                                                     CheckFailed("a value this field may take", refusal)))
                 await type_text(handle, step.input_value or "", self._typing, timeout_ms=timeout_ms,
-                                tracing=self._session.tracing)
+                                tracing=self._session.tracing, page=self._session.pointer_page)
             elif step.action == ActionType.SELECT:
-                await select_option(handle, step.input_value or "", self._typing, timeout_ms=timeout_ms)
+                await select_option(handle, step.input_value or "", self._typing, timeout_ms=timeout_ms,
+                                    page=self._session.pointer_page)
             else:
                 if irreversible:
                     # Counted as done from here: even a click that seems to fail may have gone through.
                     self._irreversible_done = True
                     self._session.accepting_dialogs = True
-                await click(handle, timeout_ms=timeout_ms)
+                await click(handle, timeout_ms=timeout_ms, page=self._session.pointer_page)
                 await self._page.wait_for_load_state("load", timeout=timeout_ms)
         except (ActionFailed, PlaywrightTimeoutError) as failure:
             raise _Trouble(CheckFailed(f"step {step.sequence_index} to {step.action.value}", _first_line(failure)),

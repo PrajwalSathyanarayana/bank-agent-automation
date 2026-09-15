@@ -244,7 +244,7 @@ def test_the_replay_command_asks_for_bill_pay_and_exits_by_status(monkeypatch, c
     monkeypatch.setattr(main_module, "_bank_is_up", lambda: True)
     asked = []
 
-    async def fake_replay(request, logger, *, headless, operator=None, trace=False):
+    async def fake_replay(request, logger, *, headless, operator=None, trace=False, slow_mo_ms=None):
         asked.append((request, headless, operator, trace))
         return _result(status, logger)
 
@@ -271,7 +271,7 @@ def test_with_an_operator_the_window_is_shown_and_a_finished_task_exits_by_its_r
     monkeypatch.setattr(env, "ws_handoff_port", 0)  # a free port, never a real run's
     asked = []
 
-    async def fake_replay(request, logger, *, headless, operator=None, trace=False):
+    async def fake_replay(request, logger, *, headless, operator=None, trace=False, slow_mo_ms=None):
         asked.append((headless, operator))
         finished = HandoffTelemetry(triggered_timestamp=datetime.now(timezone.utc), trigger_reason="OVER_AUTO_LIMIT",
                                     resolution=HandoffResolution.MANUAL_COMPLETED)
@@ -302,7 +302,7 @@ def test_a_busy_feed_port_is_reported_and_the_run_goes_on_without_it(monkeypatch
         async def __aexit__(self, *exc_info):
             return None
 
-    async def fake_replay(request, logger, *, headless, operator=None, trace=False):
+    async def fake_replay(request, logger, *, headless, operator=None, trace=False, slow_mo_ms=None):
         asked.append(operator)
         return _result(ExecutionStatus.SUCCESS, logger)
 
@@ -381,7 +381,8 @@ def test_discover_with_an_operator_shows_the_window_and_passes_the_feed(monkeypa
     monkeypatch.setattr(main_module, "ClaudeModel", lambda: object())  # the run is faked: no model is called
     asked = []
 
-    async def fake_discover(request, model, logger, *, headless, max_steps, operator=None, trace=False):
+    async def fake_discover(request, model, logger, *, headless, max_steps, operator=None, trace=False,
+                            slow_mo_ms=None):
         asked.append((headless, operator))
         return _result(ExecutionStatus.SUCCESS, logger).model_copy(update={"mode": "DISCOVERY"})
 

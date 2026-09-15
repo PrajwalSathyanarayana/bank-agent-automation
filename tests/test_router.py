@@ -38,11 +38,11 @@ def engines(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "evidence_dir", tmp_path)
     ran = []
 
-    async def fake_discover(request, model, logger, *, headless, operator, trace=False):
+    async def fake_discover(request, model, logger, *, headless, operator, trace=False, slow_mo_ms=None):
         ran.append(("discovery", request.contract.capability, dict(request.input_values), headless, operator))
         return _result("DISCOVERY")
 
-    async def fake_replay(request, logger, *, headless, operator, trace=False):
+    async def fake_replay(request, logger, *, headless, operator, trace=False, slow_mo_ms=None):
         ran.append(("replay", request.capability, dict(request.inputs), headless, operator))
         return _result("REPLAY")
 
