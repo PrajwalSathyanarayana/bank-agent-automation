@@ -5,14 +5,16 @@ __pycache__/
 .env
 *.env
 # The private key that signs artifacts (the public keys in keys/trusted/ are committed)
-secrets/
+# Anchored to the repo root: an unanchored pattern would also hide any module that
+# happens to share this name (e.g. src/evidence/ collided with the "evidence/" line below).
+/secrets/
 # docs
-docs/
+/docs/
 
 
 # Evidence and artifacts (runtime generated)
-evidence/
-artifacts/
+/evidence/
+/artifacts/
 
 # Claude Code working files
 CLAUDE.md
