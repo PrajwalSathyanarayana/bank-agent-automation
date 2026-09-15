@@ -20,12 +20,14 @@ import sys
 import urllib.error
 import urllib.request
 from contextlib import AsyncExitStack
+from pathlib import Path
 from typing import Optional, Sequence
 
 from src.config.env import env
 from src.config.settings import settings
 from src.catalog import BILL_PAY, CONTRACTS
 from src.discovery.agent import ClaudeModel, DiscoveryRequest, discover
+from src.evidence.index import write_index
 from src.handoff.session_manager import OperatorSetup
 from src.handoff.ws_server import FEED_HOST, FeedUnavailable, HandoffFeed
 from src.intake import ClaudeIntakeModel, IntakeUnavailable
@@ -79,6 +81,16 @@ def _slow_mo_note(args: argparse.Namespace) -> None:
         print("Note: --slow-mo has no visible effect without --headed or --operator.")
 
 
+def _write_evidence(run_dir: Path) -> None:
+    # Every real command line run updates this run's report and the evidence front page -
+    # never the test suite, which never reaches this function (it calls the engines
+    # directly, or mocks them). write_index renders this run's own report.html too (it had
+    # none until now), so the path below is real by the time it's printed.
+    html_path, _ = write_index(settings.evidence_dir)
+    print(f"Report: {run_dir / 'report.html'}")
+    print(f"Evidence index: {html_path}")
+
+
 async def _run(args: argparse.Namespace) -> int:
     # Checked before anything else, so no model call is paid for when the bank is down.
     if not _bank_is_up():
@@ -99,6 +111,7 @@ async def _run(args: argparse.Namespace) -> int:
         return NOT_RUN
     print(handled.result.to_json())
     print(f"Run log: {handled.result.evidence_paths.log_file}")
+    _write_evidence(Path(handled.result.evidence_paths.log_file).parent)
     return _exit_code(handled.result)
 
 
@@ -127,6 +140,7 @@ async def _discover(args: argparse.Namespace) -> int:
                                 max_steps=args.max_steps, operator=operator, trace=True, slow_mo_ms=args.slow_mo)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
+    _write_evidence(logger.run_dir)
     return 0 if result.status in (ExecutionStatus.SUCCESS, ExecutionStatus.HUMAN_ESCALATED) else 1
 
 
@@ -144,6 +158,7 @@ async def _replay(args: argparse.Namespace) -> int:
                              trace=True, slow_mo_ms=args.slow_mo)
     print(result.to_json())
     print(f"Run log: {logger.log_path}")
+    _write_evidence(logger.run_dir)
     return _exit_code(result)
 
 
