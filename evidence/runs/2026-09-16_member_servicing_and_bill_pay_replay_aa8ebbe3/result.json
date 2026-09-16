@@ -1,0 +1,159 @@
+{
+  "run_id": "aa8ebbe3-80ac-49ff-9c4c-42429ef98a19",
+  "capability": "member_servicing_and_bill_pay",
+  "artifact_version": "3.0.2",
+  "mode": "REPLAY",
+  "status": "BUSINESS_OUTCOME",
+  "summary": "Pay $1,000.00 to Sunbelt Electric Co for member 20567. Not done: the checking balance doesn't cover the amount. No payment was made.",
+  "irreversible_step": "not_reached",
+  "start_time": "2026-09-16T02:31:48.844526Z",
+  "end_time": "2026-09-16T02:31:54.027548Z",
+  "duration_ms": 5187,
+  "integrity_verified": true,
+  "step_traces": [
+    {
+      "step_id": "06792143-0e02-4d25-86fb-028db4f63747",
+      "sequence_index": 0,
+      "description": "Open the start page",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 296
+    },
+    {
+      "step_id": "9e7f5c1b-9cc4-4018-a937-05aec4d37e42",
+      "sequence_index": 1,
+      "description": "Enter teller username to sign in",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 421,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "1bd0c520-d4fc-466f-8e79-6a11d06981a4",
+      "sequence_index": 2,
+      "description": "Enter teller password to sign in",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 281,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "03561b5e-98be-4c6f-9d63-9a6af7166c5c",
+      "sequence_index": 3,
+      "description": "Submit sign-on form",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 406,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "d33eb684-5dac-4862-9b45-6b90f9164358",
+      "sequence_index": 4,
+      "description": "Open Member Search to look up the member",
+      "status": "RECOVERED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 593,
+      "locator_priority": 0,
+      "recovery_logs": [
+        {
+          "timestamp": "2026-09-16T02:31:51.446929Z",
+          "tier": "TIER_1_RULE",
+          "interruption_code": "PROMO_POPUP",
+          "resolved": true,
+          "screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_aa8ebbe3\\screenshots\\aa8ebbe3-80ac-49ff-9c4c-42429ef98a19_recovery01_PROMO_POPUP.png",
+          "details": "clicked its target; it went away"
+        }
+      ]
+    },
+    {
+      "step_id": "8582162b-c4eb-40ea-ac96-19f608d89949",
+      "sequence_index": 5,
+      "description": "Enter the member ID to search",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 281,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "c005aa3f-5b7b-4cd0-b753-b5b8a1886361",
+      "sequence_index": 6,
+      "description": "Run the member search",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 375,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "9ff74886-d1b7-4890-a8f3-f43f7756a764",
+      "sequence_index": 7,
+      "description": "Read the member's checking balance before the payment",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 93,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "15a5d416-84f7-4508-a750-2a3093549ef3",
+      "sequence_index": 8,
+      "description": "Open Bill Pay for this member",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 360,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "416143ec-5778-4c03-a87d-a017b0b11048",
+      "sequence_index": 9,
+      "description": "Select the payee for the bill payment",
+      "status": "PASSED",
+      "safety_tier": "RISKY",
+      "attempt_count": 1,
+      "duration_ms": 296,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "ae695eb1-c637-401d-8a81-df80ed013dce",
+      "sequence_index": 10,
+      "description": "Enter the payment amount",
+      "status": "PASSED",
+      "safety_tier": "RISKY",
+      "attempt_count": 1,
+      "duration_ms": 280,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "38cea898-2700-491d-a7c1-815515575b58",
+      "sequence_index": 11,
+      "description": "Proceed to the payment confirmation step",
+      "status": "FAILED",
+      "safety_tier": "RISKY",
+      "attempt_count": 1,
+      "duration_ms": 500,
+      "locator_priority": 0,
+      "failure_screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_aa8ebbe3\\screenshots\\aa8ebbe3-80ac-49ff-9c4c-42429ef98a19_outcome_step11_INSUFFICIENT_FUNDS.png",
+      "error_message": "the page shows the known outcome INSUFFICIENT_FUNDS"
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_aa8ebbe3\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_aa8ebbe3\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_aa8ebbe3\\trace.zip"
+  },
+  "terminal_outputs": {
+    "checking_balance_before": "512.75"
+  },
+  "outcome": {
+    "code": "INSUFFICIENT_FUNDS",
+    "description": "The checking balance doesn't cover the amount",
+    "screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_aa8ebbe3\\screenshots\\aa8ebbe3-80ac-49ff-9c4c-42429ef98a19_outcome_step11_INSUFFICIENT_FUNDS.png"
+  }
+}

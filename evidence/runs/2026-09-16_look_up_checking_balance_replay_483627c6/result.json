@@ -1,0 +1,41 @@
+{
+  "run_id": "483627c6-75b2-4ccb-a21e-e0571dc35a7e",
+  "capability": "look_up_checking_balance",
+  "artifact_version": "1.1.0",
+  "mode": "REPLAY",
+  "status": "TECHNICAL_FAIL",
+  "summary": "Look up the checking balance for member 10234. Stopped at step 0 (Open the start page): the bank's system didn't respond in time (PAGE_TIMEOUT).",
+  "start_time": "2026-09-16T02:52:34.916648Z",
+  "end_time": "2026-09-16T02:53:10.888743Z",
+  "duration_ms": 35968,
+  "integrity_verified": true,
+  "step_traces": [
+    {
+      "step_id": "11f158cd-20c5-4f51-b90a-91a8e9f49f8a",
+      "sequence_index": 0,
+      "description": "Open the start page",
+      "status": "FAILED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 35328,
+      "failure_screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_replay_483627c6\\screenshots\\483627c6-75b2-4ccb-a21e-e0571dc35a7e_failure_step00.png",
+      "error_message": "PAGE_TIMEOUT: it didn't arrive in time"
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_replay_483627c6\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_replay_483627c6\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_replay_483627c6\\trace.zip"
+  },
+  "failure": {
+    "step_index": 0,
+    "step_description": "Open the start page",
+    "expected": "the start page within 30 s",
+    "observed": "it didn't arrive in time",
+    "screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_replay_483627c6\\screenshots\\483627c6-75b2-4ccb-a21e-e0571dc35a7e_failure_step00.png"
+  },
+  "error": {
+    "code": "PAGE_TIMEOUT",
+    "message": "step 0: expected the start page within 30 s; observed it didn't arrive in time"
+  }
+}

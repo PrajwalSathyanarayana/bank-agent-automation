@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Evidence</title>
+<style>
+  :root {
+    --ok: #1a7f37; --ok-bg: #dafbe1;
+    --answer: #0969da; --answer-bg: #ddf4ff;
+    --person: #9a6700; --person-bg: #fff8c5;
+    --warn: #bc4c00; --warn-bg: #fff1e7;
+    --fail: #cf222e; --fail-bg: #ffebe9;
+    --ink: #1f2328; --muted: #59636e; --line: #d1d9e0; --panel: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px; background: #fff; color: var(--ink);
+    font: 15px/1.5 -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 32px 0 10px; }
+  h2:first-of-type { margin-top: 24px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  tr:hover td { background: var(--panel); }
+  a { color: var(--answer); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.answer { background: var(--answer-bg); color: var(--answer); }
+  .badge.person { background: var(--person-bg); color: var(--person); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.fail { background: var(--fail-bg); color: var(--fail); }
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0 24px; }
+  .summary-cell { max-width: 360px; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+    margin: 0 0 24px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; font-size: 0.85rem; color: var(--muted);
+  }
+  .legend .key { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; font-size: 0.9rem; }
+  .toolbar select {
+    font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+  section[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Evidence</h1>
+  <p class="sub">43 runs
+    (7 discovery, 36 replay)</p>
+  <div class="legend">
+    <span class="key"><span class="badge ok">Done</span> completed successfully</span>
+    <span class="key"><span class="badge answer">The bank's answer</span> a real answer, not a failure (e.g. no such member)</span>
+    <span class="key"><span class="badge person">A person was needed</span> a person had some part in it, whether or not the task itself went on to finish</span>
+    <span class="key"><span class="badge fail">Stopped</span> a technical problem</span>
+    <span class="key"><span class="badge warn">Artifact not saved</span> discovery ended without saving what it learned</span>
+  </div>
+  
+  <div class="toolbar">
+    <label for="mode-filter">Show:</label>
+    <select id="mode-filter">
+      <option value="">Both</option>
+      <option value="discovery">Discovery only</option>
+      <option value="replay">Replay only</option>
+    </select>
+  </div>
+
+  
+
+  <section id="discovery-section">
+    <h2>Discovery runs</h2>
+    
+  <table>
+    <tr><th>Capability</th><th>Status</th><th>Summary</th><th>Started</th><th>Duration</th></tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_discovery_b2afa5ac/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge person">A person was needed</span>
+        <span class="badge warn">Artifact not saved</span></td>
+      <td class="summary-cell">Pay $50.00 to Sunbelt Electric Co for member 40412. A person was needed (the task was learned up to the final confirmation, which a person must make) and stopped the task. No payment was made.</td>
+      <td>2026-09-16 03:10 UTC</td>
+      <td>51.1 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_discovery_ee73a372/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge person">A person was needed</span>
+        </td>
+      <td class="summary-cell">Paid $50.00 to Sunbelt Electric Co for member 40412. Checking balance $3,120.60 before, $3,070.60 after. A person had control during the run. Learned and saved as version 3.0.3.</td>
+      <td>2026-09-16 03:05 UTC</td>
+      <td>75.5 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_read_savings_balance_discovery_87432f5c/report.html">Read Savings Balance</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Savings balance for member 40412: $15,200.45. Learned and saved as version 1.0.0.</td>
+      <td>2026-09-16 02:30 UTC</td>
+      <td>37.1 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_look_up_checking_balance_discovery_4d0ae9c3/report.html">Look Up Checking Balance</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Checking balance for member 40412: $3,120.60. Learned and saved as version 1.1.0.</td>
+      <td>2026-09-16 02:29 UTC</td>
+      <td>41.9 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_email_discovery_b613f92a/report.html">Update Member Email</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Changed the email address of member 40412 to [REDACTED]. Learned and saved as version 1.0.0.</td>
+      <td>2026-09-16 02:28 UTC</td>
+      <td>39.8 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_phone_discovery_3a024d53/report.html">Update Member Phone</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Changed the phone number of member 40412 to [REDACTED]. Learned and saved as version 1.0.0.</td>
+      <td>2026-09-16 02:26 UTC</td>
+      <td>42.2 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_discovery_03c0af55/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $50.00 to Sunbelt Electric Co for member 10234. Checking balance $1,350.32 before, $1,300.32 after. Learned and saved as version 3.0.2.</td>
+      <td>2026-09-16 02:24 UTC</td>
+      <td>84.4 s</td>
+    </tr>
+    
+  </table>
+  
+  </section>
+
+  <section id="replay-section">
+    <h2>Replay runs</h2>
+    
+  <table>
+    <tr><th>Capability</th><th>Status</th><th>Summary</th><th>Started</th><th>Duration</th></tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_d6424b89/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge person">A person was needed</span>
+        </td>
+      <td class="summary-cell">Pay $1,050.00 to Sunbelt Electric Co for member 10234. A person was needed (the amount is above the bank&#39;s limit for automatic payments) and stopped the task. No payment was made.</td>
+      <td>2026-09-16 03:01 UTC</td>
+      <td>9.3 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_0acf878b/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Sunbelt Electric Co for member 11234. Not done: no member has this ID. No payment was made.</td>
+      <td>2026-09-16 02:58 UTC</td>
+      <td>3.6 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_6ff899a8/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge fail">Stopped</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Sunbelt Electric Co for member 11234. Stopped at step 0 (Open the start page): the bank&#39;s system didn&#39;t respond in time (PAGE_TIMEOUT). No payment was made.</td>
+      <td>2026-09-16 02:55 UTC</td>
+      <td>36.5 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_look_up_checking_balance_replay_483627c6/report.html">Look Up Checking Balance</a></td>
+      <td><span class="badge fail">Stopped</span>
+        </td>
+      <td class="summary-cell">Look up the checking balance for member 10234. Stopped at step 0 (Open the start page): the bank&#39;s system didn&#39;t respond in time (PAGE_TIMEOUT).</td>
+      <td>2026-09-16 02:52 UTC</td>
+      <td>36.0 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_7ca9e453/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $50.00 to Sunbelt Electric Co for member 10234. Checking balance $1,300.32 before, $1,250.32 after.</td>
+      <td>2026-09-16 02:44 UTC</td>
+      <td>5.6 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_read_savings_balance_replay_951cc3e3/report.html">Read Savings Balance</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Look up the savings balance for member 20567. Not done: the member has no savings account.</td>
+      <td>2026-09-16 02:39 UTC</td>
+      <td>4.2 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_read_savings_balance_replay_2d415878/report.html">Read Savings Balance</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Look up the savings balance for member 99999. Not done: no member has this ID.</td>
+      <td>2026-09-16 02:39 UTC</td>
+      <td>3.5 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_read_savings_balance_replay_b8a9c2ce/report.html">Read Savings Balance</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Savings balance for member 40412: $15,200.45.</td>
+      <td>2026-09-16 02:39 UTC</td>
+      <td>4.5 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_look_up_checking_balance_replay_faa6ae37/report.html">Look Up Checking Balance</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Look up the checking balance for member 99999. Not done: no member has this ID.</td>
+      <td>2026-09-16 02:38 UTC</td>
+      <td>3.8 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_look_up_checking_balance_replay_c892120a/report.html">Look Up Checking Balance</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Checking balance for member 40412: $3,120.60.</td>
+      <td>2026-09-16 02:38 UTC</td>
+      <td>4.0 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_look_up_checking_balance_replay_9381d9ce/report.html">Look Up Checking Balance</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Look up the checking balance for member 99999. Not done: no member has this ID.</td>
+      <td>2026-09-16 02:38 UTC</td>
+      <td>3.5 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_look_up_checking_balance_replay_8463d818/report.html">Look Up Checking Balance</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Checking balance for member 40412: $3,120.60.</td>
+      <td>2026-09-16 02:37 UTC</td>
+      <td>4.4 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_email_replay_d2eb5e47/report.html">Update Member Email</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Change the email address of member 40412 to laura@example. Not done: the email address isn&#39;t a valid address.</td>
+      <td>2026-09-16 02:36 UTC</td>
+      <td>5.2 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_email_replay_ccaa2492/report.html">Update Member Email</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Change the email address of member 99999 to [REDACTED]. Not done: no member has this ID.</td>
+      <td>2026-09-16 02:36 UTC</td>
+      <td>2.3 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_email_replay_ae0479b5/report.html">Update Member Email</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Changed the email address of member 40412 to [REDACTED].</td>
+      <td>2026-09-16 02:36 UTC</td>
+      <td>5.2 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_phone_replay_5151eee3/report.html">Update Member Phone</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Change the phone number of member 40412 to [REDACTED]. Not done: the phone number isn&#39;t in the form (NNN) NNN-NNNN.</td>
+      <td>2026-09-16 02:35 UTC</td>
+      <td>4.8 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_phone_replay_c9cd8901/report.html">Update Member Phone</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Change the phone number of member 99999 to [REDACTED]. Not done: no member has this ID.</td>
+      <td>2026-09-16 02:34 UTC</td>
+      <td>2.0 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_update_member_phone_replay_3baa0279/report.html">Update Member Phone</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Changed the phone number of member 40412 to [REDACTED].</td>
+      <td>2026-09-16 02:34 UTC</td>
+      <td>4.7 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_507331ae/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Acme Gas for member 10234. Not done: the payee isn&#39;t in the payee list. No payment was made.</td>
+      <td>2026-09-16 02:33 UTC</td>
+      <td>4.6 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_5c7deaf4/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Sunbelt Electric Co for member 30891. Not done: the paying account is restricted; Bill Pay is refused. No payment was made.</td>
+      <td>2026-09-16 02:32 UTC</td>
+      <td>4.3 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_aa8ebbe3/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $1,000.00 to Sunbelt Electric Co for member 20567. Not done: the checking balance doesn&#39;t cover the amount. No payment was made.</td>
+      <td>2026-09-16 02:31 UTC</td>
+      <td>5.2 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_68f8f630/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $10.00 to Sunbelt Electric Co for member 40412. Checking balance $3,020.10 before, $3,010.10 after.</td>
+      <td>2026-09-16 00:18 UTC</td>
+      <td>1.9 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_c2a999b5/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $10.00 to Sunbelt Electric Co for member 40412. Checking balance $3,030.10 before, $3,020.10 after.</td>
+      <td>2026-09-16 00:18 UTC</td>
+      <td>2.1 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_f66c71ab/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $10.00 to Sunbelt Electric Co for member 40412. Checking balance $3,040.10 before, $3,030.10 after.</td>
+      <td>2026-09-16 00:18 UTC</td>
+      <td>2.1 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_61c3028d/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Acme Gas for member 10234. Not done: the payee isn&#39;t in the payee list. No payment was made.</td>
+      <td>2026-09-16 00:18 UTC</td>
+      <td>1.7 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_1dfa1b9d/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Acme Gas for member 10234. Not done: the payee isn&#39;t in the payee list. No payment was made.</td>
+      <td>2026-09-16 00:18 UTC</td>
+      <td>1.8 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_8bc4be9f/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Acme Gas for member 10234. Not done: the payee isn&#39;t in the payee list. No payment was made.</td>
+      <td>2026-09-16 00:18 UTC</td>
+      <td>1.7 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_c45d7c54/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $10.00 to Sunbelt Electric Co for member 40412. Checking balance $3,070.10 before, $3,060.10 after.</td>
+      <td>2026-09-16 00:13 UTC</td>
+      <td>2.2 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_8df3e053/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $10.00 to Sunbelt Electric Co for member 40412. Checking balance $3,080.10 before, $3,070.10 after.</td>
+      <td>2026-09-16 00:13 UTC</td>
+      <td>2.0 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_4270ccea/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $10.00 to Sunbelt Electric Co for member 40412. Checking balance $3,090.10 before, $3,080.10 after.</td>
+      <td>2026-09-16 00:13 UTC</td>
+      <td>2.1 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_bf8b9bfa/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Acme Gas for member 10234. Not done: the payee isn&#39;t in the payee list. No payment was made.</td>
+      <td>2026-09-16 00:13 UTC</td>
+      <td>1.6 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_e7715ad1/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Acme Gas for member 10234. Not done: the payee isn&#39;t in the payee list. No payment was made.</td>
+      <td>2026-09-16 00:13 UTC</td>
+      <td>1.7 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-16_member_servicing_and_bill_pay_replay_9bd16c47/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Acme Gas for member 10234. Not done: the payee isn&#39;t in the payee list. No payment was made.</td>
+      <td>2026-09-16 00:13 UTC</td>
+      <td>1.8 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-15_member_servicing_and_bill_pay_replay_2789f868/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge person">A person was needed</span>
+        </td>
+      <td class="summary-cell">Paid $1,050.00 to Sunbelt Electric Co for member 10234 (confirmed by a person). Checking balance $2,400.32 before, $1,350.32 after.</td>
+      <td>2026-09-15 23:40 UTC</td>
+      <td>17.9 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-15_member_servicing_and_bill_pay_replay_9475ddbf/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge answer">The bank&#39;s answer</span>
+        </td>
+      <td class="summary-cell">Pay $50.00 to Sunbelt Electric Co for member 99999. Not done: no member has this ID. No payment was made.</td>
+      <td>2026-09-15 23:40 UTC</td>
+      <td>1.9 s</td>
+    </tr>
+    
+    <tr>
+      <td><a href="runs/2026-09-15_member_servicing_and_bill_pay_replay_d8c2d9e6/report.html">Member Servicing And Bill Pay</a></td>
+      <td><span class="badge ok">Done</span>
+        </td>
+      <td class="summary-cell">Paid $50.00 to Sunbelt Electric Co for member 10234. Checking balance $2,450.32 before, $2,400.32 after.</td>
+      <td>2026-09-15 23:40 UTC</td>
+      <td>3.0 s</td>
+    </tr>
+    
+  </table>
+  
+  </section>
+
+  <script>
+    (() => {
+      const select = document.getElementById('mode-filter');
+      const discovery = document.getElementById('discovery-section');
+      const replay = document.getElementById('replay-section');
+      select.addEventListener('change', () => {
+        discovery.hidden = select.value === 'replay';
+        replay.hidden = select.value === 'discovery';
+      });
+    })();
+  </script>
+  
+</main>
+</body>
+</html>

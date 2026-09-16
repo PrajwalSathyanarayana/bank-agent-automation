@@ -1,0 +1,914 @@
+{
+  "metadata": {
+    "artifact_id": "86274634-8a21-4834-87e4-78fc12fb21e9",
+    "capability": "member_servicing_and_bill_pay",
+    "description": "For member {member_id}, read the checking balance, pay {amount} to {payee_name}, then read the new balance.",
+    "version": "3.0.3",
+    "integrity_hash": "530a1ffaa22c85dfb868ac767ba7d2c98f94da8f575c1ebb1ba7cef39f8d00c0551d9ad1c8671eae7bd98797450aa744a299356fc5a23d3cf6c682c3c1204807",
+    "author": "DiscoveryEngine",
+    "target_url": "http://localhost:5000/login",
+    "tenant_override_url": null,
+    "created_timestamp": "2026-09-16T03:06:17.980037Z",
+    "last_updated_timestamp": "2026-09-16T03:06:17.980037Z"
+  },
+  "input_parameters": [
+    {
+      "key": "member_id",
+      "type": "string",
+      "required": true,
+      "description": "Member ID",
+      "example_value": null
+    },
+    {
+      "key": "amount",
+      "type": "number",
+      "required": true,
+      "description": "Amount to pay, in dollars",
+      "example_value": null
+    },
+    {
+      "key": "payee_name",
+      "type": "string",
+      "required": true,
+      "description": "Payee, as named in the payee list",
+      "example_value": null
+    }
+  ],
+  "credentials": [
+    {
+      "key": "bank_username",
+      "kind": "config",
+      "description": "Teller username"
+    },
+    {
+      "key": "bank_password",
+      "kind": "secret",
+      "description": "Teller password"
+    }
+  ],
+  "output_definitions": [
+    {
+      "key": "checking_balance_before",
+      "type": "money",
+      "description": "The member's checking balance as shown before paying",
+      "currency": "USD"
+    },
+    {
+      "key": "new_checking_balance",
+      "type": "money",
+      "description": "The checking balance shown on the receipt after paying",
+      "currency": "USD"
+    }
+  ],
+  "known_outcomes": [
+    {
+      "code": "MEMBER_NOT_FOUND",
+      "description": "No member has this ID",
+      "signal": "page_text",
+      "text": "No member found with that ID.",
+      "input_key": null
+    },
+    {
+      "code": "INSUFFICIENT_FUNDS",
+      "description": "The checking balance doesn't cover the amount",
+      "signal": "page_text",
+      "text": "Insufficient funds for this payment amount.",
+      "input_key": null
+    },
+    {
+      "code": "ACCOUNT_RESTRICTED",
+      "description": "The paying account is restricted; Bill Pay is refused",
+      "signal": "page_text",
+      "text": "the paying account is restricted",
+      "input_key": null
+    },
+    {
+      "code": "PAYEE_NOT_FOUND",
+      "description": "The payee isn't in the payee list",
+      "signal": "no_such_option",
+      "text": null,
+      "input_key": "payee_name"
+    }
+  ],
+  "allowed_paths": [
+    "/",
+    "/login",
+    "/dashboard",
+    "/search",
+    "/member/*",
+    "/member/*/accounts",
+    "/billpay",
+    "/billpay/confirm",
+    "/session-timeout"
+  ],
+  "known_interruptions": [
+    {
+      "code": "PROMO_POPUP",
+      "description": "A promotion covers the dashboard; its Close button hides it",
+      "signal": "element_visible",
+      "text": null,
+      "locator": {
+        "type": "css",
+        "value": "div.overlay",
+        "priority": 0
+      },
+      "recovery": "click",
+      "target": {
+        "type": "css",
+        "value": "div.overlay input[value='Close']",
+        "priority": 0
+      }
+    },
+    {
+      "code": "SESSION_EXPIRED",
+      "description": "The session expired; the bank forgot the member and any pending payment",
+      "signal": "page_text",
+      "text": "Your session has expired.",
+      "locator": null,
+      "recovery": "start_over",
+      "target": null
+    }
+  ],
+  "confirmation_checks": [
+    {
+      "label": "Payee:",
+      "input_key": "payee_name",
+      "compare_as": "text",
+      "currency": null
+    },
+    {
+      "label": "Amount:",
+      "input_key": "amount",
+      "compare_as": "money",
+      "currency": "USD"
+    }
+  ],
+  "steps": [
+    {
+      "step_id": "5a365b9f-1cd6-4913-ae9c-8b6bf1d2cc79",
+      "sequence_index": 0,
+      "action": "navigate",
+      "description": "Open the start page",
+      "locators": [],
+      "safety_tier": "SAFE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "59e6b757-ff97-45be-9eac-04ca1c6de6fe",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/login",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "77c6a5f6-1f5a-4955-a280-80bd1d9eac46",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Sign On - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "6b8b85f0-2774-4080-bda2-fc580660a3b8",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "750b6500-1cf6-450e-a451-f3d3866f7608",
+      "sequence_index": 1,
+      "action": "type",
+      "description": "Enter the teller username to sign in.",
+      "locators": [
+        {
+          "type": "css",
+          "value": "input[name=\"username\"]",
+          "priority": 0
+        },
+        {
+          "type": "xpath",
+          "value": "//*[self::td or self::th][normalize-space(translate(., ' ', ' '))=\"Username:\"]/following-sibling::*[self::td or self::th][.//input][1]//input",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > input:nth-of-type(1)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": "{credential:bank_username}",
+      "checkpoints": [
+        {
+          "checkpoint_id": "ffd171e2-6eee-48bb-bacf-0ae29b28c894",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/login",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "b2b6309e-d55d-4a85-b80f-900bed98bfb5",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Sign On - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "e0c75e72-f38c-4860-a62f-f79a4d5fa005",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "dee35841-4671-489a-a45c-594cace02e20",
+      "sequence_index": 2,
+      "action": "type",
+      "description": "Enter the teller password to sign in.",
+      "locators": [
+        {
+          "type": "css",
+          "value": "input[name=\"password\"]",
+          "priority": 0
+        },
+        {
+          "type": "xpath",
+          "value": "//*[self::td or self::th][normalize-space(translate(., ' ', ' '))=\"Password:\"]/following-sibling::*[self::td or self::th][.//input][1]//input",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(2) > td:nth-of-type(2) > input:nth-of-type(1)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": "{credential:bank_password}",
+      "checkpoints": [
+        {
+          "checkpoint_id": "d33e9822-efad-4dc4-9933-264ad2437e8f",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/login",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "8aed3ae8-f94b-4895-97cc-2a06f47bb038",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Sign On - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "594c8aa0-a36b-4c9b-9acf-4101999ba960",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "bb958835-e13c-481d-bb07-da7381e6a56b",
+      "sequence_index": 3,
+      "action": "click",
+      "description": "Submit the sign-on form.",
+      "locators": [
+        {
+          "type": "text_content",
+          "value": "Log In",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(3) > td:nth-of-type(2) > input:nth-of-type(1)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form input[type=\"submit\"][value=\"Log In\"]",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "67f99e30-8bf8-4131-ba85-be9e1a0a40ad",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/dashboard",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "b36e7ee1-0d6e-4404-a6b0-3284b7f38f5d",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Dashboard - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "61bc327f-37ab-4d15-afcb-24667e5bbfe0",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "107cb536-e74f-465f-a6db-724cb43d8bc4",
+      "sequence_index": 4,
+      "action": "click",
+      "description": "Open member search to look up the member.",
+      "locators": [
+        {
+          "type": "text_content",
+          "value": "Member Search",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "a[href=\"/search\"]",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "td.nav > div:nth-of-type(3) > a:nth-of-type(1)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "e88b4d77-3ec9-491b-92a6-464284dc580d",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/search",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "972a3caf-9466-43b9-b1b0-15dae40bb57f",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Member Search - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "dbb12780-469b-4bf2-9926-e039832f9126",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "559c127b-d587-4d93-ab1e-837249835244",
+      "sequence_index": 5,
+      "action": "type",
+      "description": "Enter the member ID to look up the account.",
+      "locators": [
+        {
+          "type": "css",
+          "value": "input[name=\"member_id\"]",
+          "priority": 0
+        },
+        {
+          "type": "xpath",
+          "value": "//*[self::td or self::th][normalize-space(translate(., ' ', ' '))=\"Member ID:\"]/following-sibling::*[self::td or self::th][.//input][1]//input",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > input:nth-of-type(1)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": "{member_id}",
+      "checkpoints": [
+        {
+          "checkpoint_id": "fc567463-e799-45c2-8c46-28ebbc428f58",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/search",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "67e9bc46-371f-4c38-a060-87e8f60aa681",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Member Search - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "df64a2d9-a4ad-44f0-823f-a886d9b764fe",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "fae1e299-1d33-412f-996b-7449edfb275b",
+      "sequence_index": 6,
+      "action": "click",
+      "description": "Run the member search.",
+      "locators": [
+        {
+          "type": "text_content",
+          "value": "Search",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(2) > td:nth-of-type(2) > input:nth-of-type(1)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form input[type=\"submit\"][value=\"Search\"]",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "5c63a86b-6ef0-4474-a045-5f03b6f7389a",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/member/{member_id}",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "494f4517-d217-49a2-8c3d-500618fd6d94",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Member Detail - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "27275c18-a9b7-409e-adb4-3f8b04fbd1d6",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "f83db436-0f92-4ad2-af53-ca5ae6625704",
+      "sequence_index": 7,
+      "action": "extract_text",
+      "description": "Read the member's checking balance before the payment.",
+      "locators": [
+        {
+          "type": "xpath",
+          "value": "//*[self::td or self::th][normalize-space(translate(., ' ', ' '))=\"Primary Account Balance:\"]/following-sibling::*[self::td or self::th][1]",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "table.grid > tbody:nth-of-type(1) > tr:nth-of-type(7) > td:nth-of-type(2)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "div.panel-body > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(7) > td:nth-of-type(2)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "7292e597-5d53-499d-8878-c2e89cc20e97",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/member/{member_id}",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "cf7ea9ce-6cf5-43a3-a39d-7dc8da673758",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Member Detail - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "fa8d4693-1740-4ee0-b4d5-e496c7c00aac",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": "checking_balance_before",
+      "option_value": null
+    },
+    {
+      "step_id": "de8b4b1f-9d7e-43a7-b886-f9cd8aa5490c",
+      "sequence_index": 8,
+      "action": "click",
+      "description": "Open Bill Pay for this member.",
+      "locators": [
+        {
+          "type": "css",
+          "value": "div.actions a[href=\"/billpay\"]",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "div.actions > a:nth-of-type(3)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "div.panel-body a[href=\"/billpay\"]",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "bd54eac8-9ee5-4725-b43d-b0e330e3de48",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/billpay",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "1433d0af-a613-4884-8f1c-019398dc7197",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Bill Pay - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "044b9899-63a8-4d04-bc11-78bab3db99c8",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "18f87901-57c1-4486-8648-297ae31223fe",
+      "sequence_index": 9,
+      "action": "select",
+      "description": "Select the payee for the bill payment.",
+      "locators": [
+        {
+          "type": "css",
+          "value": "select[name=\"payee_id\"]",
+          "priority": 0
+        },
+        {
+          "type": "xpath",
+          "value": "//*[self::td or self::th][normalize-space(translate(., ' ', ' '))=\"Payee:\"]/following-sibling::*[self::td or self::th][.//select][1]//select",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(2) > td:nth-of-type(2) > select:nth-of-type(1)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "RISKY",
+      "input_value": "{payee_name}",
+      "checkpoints": [
+        {
+          "checkpoint_id": "b4a87f71-3ab5-41e4-be99-98b64ef3ca4e",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/billpay",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "99a60878-a10b-44cb-8b8d-c269af2cff88",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Bill Pay - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "523ef51e-16c6-44d4-80e0-744b9468ab81",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "bf79bcc9-17bf-469c-bb99-ca803a967ed4",
+      "sequence_index": 10,
+      "action": "type",
+      "description": "Enter the payment amount.",
+      "locators": [
+        {
+          "type": "css",
+          "value": "input[name=\"amount\"]",
+          "priority": 0
+        },
+        {
+          "type": "xpath",
+          "value": "//*[self::td or self::th][normalize-space(translate(., ' ', ' '))=\"Amount:\"]/following-sibling::*[self::td or self::th][.//input][1]//input",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(3) > td:nth-of-type(2) > input:nth-of-type(1)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "RISKY",
+      "input_value": "{amount}",
+      "checkpoints": [
+        {
+          "checkpoint_id": "fd5f4751-87e9-494b-a6ae-3301ca18723d",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/billpay",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "3ea642b7-48a7-4dc1-9338-500df80acc6d",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Bill Pay - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "3d267207-8c36-4e1d-a257-edda29174ecf",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "78ab694f-473b-49fc-834d-615518340c62",
+      "sequence_index": 11,
+      "action": "click",
+      "description": "Continue to the payment confirmation step.",
+      "locators": [
+        {
+          "type": "text_content",
+          "value": "Continue",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "table.form > tbody:nth-of-type(1) > tr:nth-of-type(4) > td:nth-of-type(2) > input:nth-of-type(1)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.form input[type=\"submit\"][value=\"Continue\"]",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "RISKY",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "3ece1c68-49e5-4c09-833d-1f74b94cfc2e",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/billpay/confirm",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "a3e8b2b2-77b3-422b-9b7a-81687cf1cd77",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Bill Pay Confirmation - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "d2d93388-dc24-4b10-9149-96c846c4de3b",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "7ec64db9-8c96-4b6e-a386-d301d7bb6b46",
+      "sequence_index": 12,
+      "action": "click",
+      "description": "Clicked \"Confirm Payment\" (done by a person)",
+      "locators": [
+        {
+          "type": "css",
+          "value": "form.actions input[type=\"submit\"][value=\"Confirm Payment\"]",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "form.actions > input:nth-of-type(1)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "div.panel-body input[type=\"submit\"][value=\"Confirm Payment\"]",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "IRREVERSIBLE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "873bd456-a475-4ff8-bf7b-cdf5bca30967",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/billpay/confirm",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "4ede3d97-f6d8-4813-a7d8-905984f66ec2",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    },
+    {
+      "step_id": "d72d3735-9c9e-40b7-aedf-a1d082d6218f",
+      "sequence_index": 13,
+      "action": "extract_text",
+      "description": "Read the updated checking balance from the payment receipt.",
+      "locators": [
+        {
+          "type": "xpath",
+          "value": "//*[self::td or self::th][normalize-space(translate(., ' ', ' '))=\"New Checking Balance:\"]/following-sibling::*[self::td or self::th][1]",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "table.grid > tbody:nth-of-type(1) > tr:nth-of-type(3) > td:nth-of-type(2)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "div.panel-body > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(3) > td:nth-of-type(2)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": null,
+      "checkpoints": [
+        {
+          "checkpoint_id": "6433eecc-8a93-4f88-892e-34d3bc08c704",
+          "type": "page_path",
+          "target_locator": null,
+          "expected_value": "/billpay/confirm",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "a7c71143-1d99-4ac5-b0d5-387d66040924",
+          "type": "page_title",
+          "target_locator": null,
+          "expected_value": "Bill Pay Confirmation - Sunbelt Credit Union",
+          "timeout_ms": 10000
+        },
+        {
+          "checkpoint_id": "afd551a0-6871-4d59-a6ad-d331fbaa0be7",
+          "type": "next_step_target",
+          "target_locator": null,
+          "expected_value": null,
+          "timeout_ms": 10000
+        }
+      ],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": "new_checking_balance",
+      "option_value": null
+    },
+    {
+      "step_id": "19c61a03-e6fe-43eb-96f6-79aaf3e84885",
+      "sequence_index": 14,
+      "action": "assert_text",
+      "description": "Confirm the payment completed successfully.",
+      "locators": [
+        {
+          "type": "text_content",
+          "value": "Payment Submitted Successfully",
+          "priority": 0
+        },
+        {
+          "type": "css",
+          "value": "td.main > div:nth-of-type(1)",
+          "priority": 1
+        },
+        {
+          "type": "css",
+          "value": "table.shell > tbody:nth-of-type(1) > tr:nth-of-type(3) > td:nth-of-type(2) > div:nth-of-type(1)",
+          "priority": 2
+        }
+      ],
+      "safety_tier": "SAFE",
+      "input_value": "Payment Submitted Successfully",
+      "checkpoints": [],
+      "retry_budget": {
+        "max_attempts": 3,
+        "poll_interval_ms": 500
+      },
+      "output_key": null,
+      "option_value": null
+    }
+  ],
+  "global_assertions": []
+}

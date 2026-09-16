@@ -1,0 +1,33 @@
+{
+  "run_id": "b2afa5ac-9a3c-4201-9e37-2833bcca6efd",
+  "capability": "member_servicing_and_bill_pay",
+  "mode": "DISCOVERY",
+  "status": "HUMAN_ESCALATED",
+  "summary": "Pay $50.00 to Sunbelt Electric Co for member 40412. A person was needed (the task was learned up to the final confirmation, which a person must make) and stopped the task. No payment was made.",
+  "irreversible_step": "not_reached",
+  "start_time": "2026-09-16T03:10:31.627118Z",
+  "end_time": "2026-09-16T03:11:22.685647Z",
+  "duration_ms": 51061,
+  "integrity_verified": false,
+  "handoff_events": [
+    {
+      "triggered_timestamp": "2026-09-16T03:11:14.810809Z",
+      "resolved_timestamp": "2026-09-16T03:11:22.684648Z",
+      "duration_ms": 7875,
+      "trigger_reason": "IRREVERSIBLE_STEP",
+      "step_index": 12,
+      "resolution": "ABORTED",
+      "session_lock_token": "ORAm3SmfcL_1F9ed7ShjJA",
+      "person_actions": 0
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_discovery_b2afa5ac\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_discovery_b2afa5ac\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_discovery_b2afa5ac\\trace.zip"
+  },
+  "error": {
+    "code": "IRREVERSIBLE_STEP",
+    "message": "the final confirmation is left to a person"
+  }
+}

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Look Up Checking Balance — Replay report</title>
+<style>
+  :root {
+    --ok: #1a7f37; --ok-bg: #dafbe1;
+    --answer: #0969da; --answer-bg: #ddf4ff;
+    --person: #9a6700; --person-bg: #fff8c5;
+    --warn: #bc4c00; --warn-bg: #fff1e7;
+    --fail: #cf222e; --fail-bg: #ffebe9;
+    --ink: #1f2328; --muted: #59636e; --line: #d1d9e0; --panel: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px; background: #fff; color: var(--ink);
+    font: 15px/1.5 -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 32px 0 10px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 20px; }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.answer { background: var(--answer-bg); color: var(--answer); }
+  .badge.person { background: var(--person-bg); color: var(--person); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.fail { background: var(--fail-bg); color: var(--fail); }
+  .badge.mode { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+  .summary {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 16px 18px; font-size: 1.05rem;
+  }
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .alert {
+    border-radius: 8px; padding: 14px 16px; border: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .alert.fail { background: var(--fail-bg); border-color: #ffc1bc; }
+  .alert.person { background: var(--person-bg); border-color: #f2d675; }
+  .alert.answer { background: var(--answer-bg); border-color: #b6e3ff; }
+  .alert code { font-size: 0.85em; }
+  .shots { display: flex; flex-wrap: wrap; gap: 12px; }
+  .shots figure { margin: 0; width: 260px; }
+  .shots img {
+    width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block;
+  }
+  .shots figcaption { color: var(--muted); font-size: 0.8rem; margin-top: 4px; word-break: break-all; }
+  footer { margin-top: 36px; color: var(--muted); font-size: 0.9rem; }
+  footer a { color: inherit; }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Look Up Checking Balance</h1>
+  <p class="sub">Run 8463d818-5c37-4c46-9ffd-d2ffb2a84156</p>
+  <div class="badges">
+    <span class="badge mode">Replay</span>
+    <span class="badge ok">Done</span>
+    
+    
+    <span class="badge ok">Signature verified</span>
+  </div>
+
+  <p class="summary">Checking balance for member 40412: $3,120.60.</p>
+
+  <h2>Run details</h2>
+  <dl class="facts">
+    <dt>Started</dt><dd>2026-09-16 02:37:33 UTC</dd>
+    <dt>Finished</dt><dd>2026-09-16 02:37:38 UTC</dd>
+    <dt>Duration</dt><dd>4.4 s</dd>
+    <dt>Artifact version</dt><dd>1.1.0</dd>
+    
+  </dl>
+
+  
+  <h2>Values read</h2>
+  <table>
+    <tr><th>Field</th><th>Value</th></tr>
+    
+    <tr><td>Checking balance</td><td>3120.60</td></tr>
+    
+  </table>
+  
+
+  
+
+  
+
+  
+
+  
+
+  <h2>Steps</h2>
+  
+  <table>
+    <tr><th>#</th><th>What happened</th><th>Result</th><th>Locator used</th><th>Note</th></tr>
+    
+    <tr>
+      <td>0</td>
+      <td>Open the start page</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        —
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>1</td>
+      <td>Enter the teller username to sign in</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>2</td>
+      <td>Enter the teller password to sign in</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>3</td>
+      <td>Submit the sign-on form to access the teller portal</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>4</td>
+      <td>Open Member Search to look up the member</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>5</td>
+      <td>Enter the member ID to search for the member record</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>6</td>
+      <td>Run the search to open the member&#39;s record</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>7</td>
+      <td>Open the full account list to find the checking account balance reliably</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>8</td>
+      <td>Read the balance shown in the checking account row</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+    <tr>
+      <td>9</td>
+      <td>Confirm the member&#39;s account list table is displayed, which is where the checking balance is read</td>
+      <td style="color:var(--ok);font-weight:600;">
+        Passed
+      </td>
+      <td>
+        the saved locator worked as-is
+        
+      </td>
+      <td></td>
+    </tr>
+    
+  </table>
+  
+
+  
+  <h2>Screenshots</h2>
+  <div class="shots">
+    
+    <figure>
+      <img src="screenshots/8463d818-5c37-4c46-9ffd-d2ffb2a84156_success_step09.png" alt="8463d818-5c37-4c46-9ffd-d2ffb2a84156_success_step09.png" loading="lazy">
+      <figcaption>8463d818-5c37-4c46-9ffd-d2ffb2a84156_success_step09.png</figcaption>
+    </figure>
+    
+  </div>
+  
+
+  <footer>
+    Raw evidence in this same folder: <a href="result.json">result.json</a> ·
+    <a href="log.json">log.json</a> ·
+    <a href="trace.zip">trace.zip</a> (open with <code>playwright show-trace trace.zip</code>)
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "run_id": "4d0ae9c3-ddb1-41a1-9ed9-c8f55c474f81",
+  "capability": "look_up_checking_balance",
+  "artifact_version": "1.1.0",
+  "mode": "DISCOVERY",
+  "status": "SUCCESS",
+  "summary": "Checking balance for member 40412: $3,120.60. Learned and saved as version 1.1.0.",
+  "start_time": "2026-09-16T02:29:18.066001Z",
+  "end_time": "2026-09-16T02:29:59.955109Z",
+  "duration_ms": 41891,
+  "integrity_verified": false,
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_discovery_4d0ae9c3\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_discovery_4d0ae9c3\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_look_up_checking_balance_discovery_4d0ae9c3\\trace.zip"
+  },
+  "terminal_outputs": {
+    "checking_balance": "3120.60"
+  }
+}

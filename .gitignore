@@ -12,9 +12,10 @@ __pycache__/
 /docs/
 
 
-# Evidence and artifacts (runtime generated)
-/evidence/
-/artifacts/
+# The curated submission evidence (evidence/) and the learned artifacts (artifacts/) are
+# committed on purpose - the brief asks for a saved example artifact and run evidence.
+# The full development-testing trail (every run made while building this) stays local only.
+/evidence-dev-history/
 
 # Claude Code working files
 CLAUDE.md

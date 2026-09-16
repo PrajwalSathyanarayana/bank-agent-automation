@@ -1,0 +1,96 @@
+{
+  "run_id": "9475ddbf-df21-4dc2-bac1-3b6c22901f21",
+  "capability": "member_servicing_and_bill_pay",
+  "artifact_version": "3.0.1",
+  "mode": "REPLAY",
+  "status": "BUSINESS_OUTCOME",
+  "summary": "Pay $50.00 to Sunbelt Electric Co for member 99999. Not done: no member has this ID. No payment was made.",
+  "irreversible_step": "not_reached",
+  "start_time": "2026-09-15T23:40:35.931835Z",
+  "end_time": "2026-09-15T23:40:37.798373Z",
+  "duration_ms": 1860,
+  "integrity_verified": true,
+  "step_traces": [
+    {
+      "step_id": "ad752e4a-aa98-419b-b80f-293a776d5377",
+      "sequence_index": 0,
+      "description": "Open the start page",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 108
+    },
+    {
+      "step_id": "d1b5f0fa-e5f5-40a3-9a7b-74164c62c448",
+      "sequence_index": 1,
+      "description": "Enter the teller username to sign in.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 125,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "6bfafb87-95f0-4c92-84c8-5512e75eb8a2",
+      "sequence_index": 2,
+      "description": "Enter the teller password to sign in.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 93,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "9c69fd3d-a8df-44b6-8a44-d88cd86dff0f",
+      "sequence_index": 3,
+      "description": "Submit the sign-on form.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 172,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "9b710d67-a800-4f6a-bf03-98b502a6eb11",
+      "sequence_index": 4,
+      "description": "Open Member Search to look up the member.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 186,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "b76204da-249d-4b8d-8eec-bdba4ba2586f",
+      "sequence_index": 5,
+      "description": "Enter the member ID to search.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 141,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "a9ee3f99-46a8-4bc4-bdf2-4bc8169805da",
+      "sequence_index": 6,
+      "description": "Run the member search.",
+      "status": "FAILED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 375,
+      "locator_priority": 0,
+      "failure_screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-15_member_servicing_and_bill_pay_replay_9475ddbf\\screenshots\\9475ddbf-df21-4dc2-bac1-3b6c22901f21_outcome_step06_MEMBER_NOT_FOUND.png",
+      "error_message": "the page shows the known outcome MEMBER_NOT_FOUND"
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-15_member_servicing_and_bill_pay_replay_9475ddbf\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-15_member_servicing_and_bill_pay_replay_9475ddbf\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-15_member_servicing_and_bill_pay_replay_9475ddbf\\trace.zip"
+  },
+  "outcome": {
+    "code": "MEMBER_NOT_FOUND",
+    "description": "No member has this ID",
+    "screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-15_member_servicing_and_bill_pay_replay_9475ddbf\\screenshots\\9475ddbf-df21-4dc2-bac1-3b6c22901f21_outcome_step06_MEMBER_NOT_FOUND.png"
+  }
+}

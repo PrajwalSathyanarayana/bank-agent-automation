@@ -1,0 +1,34 @@
+{
+  "run_id": "ee73a372-45c0-4a38-9666-daa7bc6b00b3",
+  "capability": "member_servicing_and_bill_pay",
+  "artifact_version": "3.0.3",
+  "mode": "DISCOVERY",
+  "status": "SUCCESS",
+  "summary": "Paid $50.00 to Sunbelt Electric Co for member 40412. Checking balance $3,120.60 before, $3,070.60 after. A person had control during the run. Learned and saved as version 3.0.3.",
+  "irreversible_step": "completed",
+  "start_time": "2026-09-16T03:05:02.554401Z",
+  "end_time": "2026-09-16T03:06:18.002808Z",
+  "duration_ms": 75453,
+  "integrity_verified": false,
+  "handoff_events": [
+    {
+      "triggered_timestamp": "2026-09-16T03:05:41.574216Z",
+      "resolved_timestamp": "2026-09-16T03:06:09.377369Z",
+      "duration_ms": 27796,
+      "trigger_reason": "IRREVERSIBLE_STEP",
+      "step_index": 12,
+      "resolution": "RESUMED",
+      "session_lock_token": "cj_OoDEa7feVuTvrb1oX6A",
+      "person_actions": 1
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_discovery_ee73a372\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_discovery_ee73a372\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_discovery_ee73a372\\trace.zip"
+  },
+  "terminal_outputs": {
+    "checking_balance_before": "3120.60",
+    "new_checking_balance": "3070.60"
+  }
+}

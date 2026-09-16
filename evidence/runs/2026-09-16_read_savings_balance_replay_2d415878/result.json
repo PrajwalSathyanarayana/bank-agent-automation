@@ -1,0 +1,95 @@
+{
+  "run_id": "2d415878-2476-4020-a44c-609321c43d41",
+  "capability": "read_savings_balance",
+  "artifact_version": "1.0.0",
+  "mode": "REPLAY",
+  "status": "BUSINESS_OUTCOME",
+  "summary": "Look up the savings balance for member 99999. Not done: no member has this ID.",
+  "start_time": "2026-09-16T02:39:29.744953Z",
+  "end_time": "2026-09-16T02:39:33.232063Z",
+  "duration_ms": 3483,
+  "integrity_verified": true,
+  "step_traces": [
+    {
+      "step_id": "c650eb9b-2128-4e86-89d4-0bcae7a9138d",
+      "sequence_index": 0,
+      "description": "Open the start page",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 250
+    },
+    {
+      "step_id": "9108eaaf-c545-4e89-bbbc-02ac47a754ba",
+      "sequence_index": 1,
+      "description": "Enter the teller username to sign in.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 421,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "712aa4ec-a4e2-47bd-995a-d4486a249aea",
+      "sequence_index": 2,
+      "description": "Enter the teller password to sign in.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 312,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "7c5bb737-a14c-4aad-a311-f8d9dfd97247",
+      "sequence_index": 3,
+      "description": "Submit the sign-on form to access the teller portal.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 375,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "aaa29e28-7f4d-42a2-b3f6-b93352f06b5e",
+      "sequence_index": 4,
+      "description": "Open Member Search to look up the member.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 375,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "ad93a08a-21c5-4fbf-af68-46c78fdc7a81",
+      "sequence_index": 5,
+      "description": "Enter the member ID to search for.",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 296,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "1c82a316-c6e9-43a3-9e4b-853968900708",
+      "sequence_index": 6,
+      "description": "Run the search to open the member's record.",
+      "status": "FAILED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 468,
+      "locator_priority": 0,
+      "failure_screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_replay_2d415878\\screenshots\\2d415878-2476-4020-a44c-609321c43d41_outcome_step06_MEMBER_NOT_FOUND.png",
+      "error_message": "the page shows the known outcome MEMBER_NOT_FOUND"
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_replay_2d415878\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_replay_2d415878\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_replay_2d415878\\trace.zip"
+  },
+  "outcome": {
+    "code": "MEMBER_NOT_FOUND",
+    "description": "No member has this ID",
+    "screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_replay_2d415878\\screenshots\\2d415878-2476-4020-a44c-609321c43d41_outcome_step06_MEMBER_NOT_FOUND.png"
+  }
+}

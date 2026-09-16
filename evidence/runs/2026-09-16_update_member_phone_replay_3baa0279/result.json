@@ -1,0 +1,128 @@
+{
+  "run_id": "3baa0279-d2ed-4f44-8e0e-109415f82396",
+  "capability": "update_member_phone",
+  "artifact_version": "1.0.0",
+  "mode": "REPLAY",
+  "status": "SUCCESS",
+  "summary": "Changed the phone number of member 40412 to [REDACTED].",
+  "start_time": "2026-09-16T02:34:09.264774Z",
+  "end_time": "2026-09-16T02:34:13.927272Z",
+  "duration_ms": 4656,
+  "integrity_verified": true,
+  "step_traces": [
+    {
+      "step_id": "3b687fb4-e5ed-470a-b157-46d9e023b3ec",
+      "sequence_index": 0,
+      "description": "Open the start page",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 235
+    },
+    {
+      "step_id": "4ead2f8f-f28c-4568-a0ea-0bce5238ae04",
+      "sequence_index": 1,
+      "description": "Enter teller username to sign in",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 406,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "ee9e5a63-53e7-40d0-978f-309cf998af2b",
+      "sequence_index": 2,
+      "description": "Enter teller password to sign in",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 296,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "09ce40a5-0e2a-479f-986f-ff1daa410812",
+      "sequence_index": 3,
+      "description": "Submit sign-on form",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 375,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "97d55cc1-5911-4a7a-9692-5340dfd0b2ff",
+      "sequence_index": 4,
+      "description": "Open Member Search to find the member record",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 389,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "c3b41ecd-8882-485e-b7a9-d6f7bb6b6a3c",
+      "sequence_index": 5,
+      "description": "Enter the member ID to look up the record",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 296,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "9ac878f7-aa39-4aef-8f6d-40355682939b",
+      "sequence_index": 6,
+      "description": "Run the member search",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 360,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "e7dc10fe-92b7-4c1d-a7fb-10acfb0fe169",
+      "sequence_index": 7,
+      "description": "Open the member's profile editor to change contact info",
+      "status": "PASSED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 375,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "b593909f-6ba5-4844-a823-ed8fe73444fa",
+      "sequence_index": 8,
+      "description": "Replace the phone number with the new value",
+      "status": "PASSED",
+      "safety_tier": "RISKY",
+      "attempt_count": 1,
+      "duration_ms": 296,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "fa51d62a-8c85-4088-8196-b317e5a4eb59",
+      "sequence_index": 9,
+      "description": "Save the updated profile",
+      "status": "PASSED",
+      "safety_tier": "RISKY",
+      "attempt_count": 1,
+      "duration_ms": 375,
+      "locator_priority": 0
+    },
+    {
+      "step_id": "c324ec78-b4cc-40ed-980a-3c0ac6070d63",
+      "sequence_index": 10,
+      "description": "Confirm the profile change was saved",
+      "status": "PASSED",
+      "safety_tier": "RISKY",
+      "attempt_count": 1,
+      "duration_ms": 78,
+      "locator_priority": 0
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_update_member_phone_replay_3baa0279\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_update_member_phone_replay_3baa0279\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_update_member_phone_replay_3baa0279\\trace.zip"
+  }
+}

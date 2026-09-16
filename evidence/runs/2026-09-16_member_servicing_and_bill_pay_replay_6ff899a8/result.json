@@ -1,0 +1,42 @@
+{
+  "run_id": "6ff899a8-ded0-4e4c-a108-fc5cd57c9599",
+  "capability": "member_servicing_and_bill_pay",
+  "artifact_version": "3.0.2",
+  "mode": "REPLAY",
+  "status": "TECHNICAL_FAIL",
+  "summary": "Pay $50.00 to Sunbelt Electric Co for member 11234. Stopped at step 0 (Open the start page): the bank's system didn't respond in time (PAGE_TIMEOUT). No payment was made.",
+  "irreversible_step": "not_reached",
+  "start_time": "2026-09-16T02:55:14.770716Z",
+  "end_time": "2026-09-16T02:55:51.264452Z",
+  "duration_ms": 36500,
+  "integrity_verified": true,
+  "step_traces": [
+    {
+      "step_id": "06792143-0e02-4d25-86fb-028db4f63747",
+      "sequence_index": 0,
+      "description": "Open the start page",
+      "status": "FAILED",
+      "safety_tier": "SAFE",
+      "attempt_count": 1,
+      "duration_ms": 35343,
+      "failure_screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_6ff899a8\\screenshots\\6ff899a8-ded0-4e4c-a108-fc5cd57c9599_failure_step00.png",
+      "error_message": "PAGE_TIMEOUT: it didn't arrive in time"
+    }
+  ],
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_6ff899a8\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_6ff899a8\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_6ff899a8\\trace.zip"
+  },
+  "failure": {
+    "step_index": 0,
+    "step_description": "Open the start page",
+    "expected": "the start page within 30 s",
+    "observed": "it didn't arrive in time",
+    "screenshot_path": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_member_servicing_and_bill_pay_replay_6ff899a8\\screenshots\\6ff899a8-ded0-4e4c-a108-fc5cd57c9599_failure_step00.png"
+  },
+  "error": {
+    "code": "PAGE_TIMEOUT",
+    "message": "step 0: expected the start page within 30 s; observed it didn't arrive in time"
+  }
+}

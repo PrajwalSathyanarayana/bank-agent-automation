@@ -1,0 +1,20 @@
+{
+  "run_id": "87432f5c-0d37-44be-a29e-68421fa8cce0",
+  "capability": "read_savings_balance",
+  "artifact_version": "1.0.0",
+  "mode": "DISCOVERY",
+  "status": "SUCCESS",
+  "summary": "Savings balance for member 40412: $15,200.45. Learned and saved as version 1.0.0.",
+  "start_time": "2026-09-16T02:30:22.631187Z",
+  "end_time": "2026-09-16T02:30:59.684754Z",
+  "duration_ms": 37061,
+  "integrity_verified": false,
+  "evidence_paths": {
+    "log_file": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_discovery_87432f5c\\log.json",
+    "screenshots_dir": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_discovery_87432f5c\\screenshots",
+    "playwright_trace_zip": "D:\\UofA\\Personal Project\\bank-agent-automation\\evidence\\runs\\2026-09-16_read_savings_balance_discovery_87432f5c\\trace.zip"
+  },
+  "terminal_outputs": {
+    "savings_balance": "15200.45"
+  }
+}
