@@ -8,6 +8,7 @@
     --ok: #1a7f37; --ok-bg: #dafbe1;
     --answer: #0969da; --answer-bg: #ddf4ff;
     --person: #9a6700; --person-bg: #fff8c5;
+    --warn: #bc4c00; --warn-bg: #fff1e7;
     --fail: #cf222e; --fail-bg: #ffebe9;
     --ink: #1f2328; --muted: #59636e; --line: #d1d9e0; --panel: #f6f8fa;
   }
@@ -27,6 +28,7 @@
   .badge.ok { background: var(--ok-bg); color: var(--ok); }
   .badge.answer { background: var(--answer-bg); color: var(--answer); }
   .badge.person { background: var(--person-bg); color: var(--person); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
   .badge.fail { background: var(--fail-bg); color: var(--fail); }
   .badge.mode { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
   .summary {
@@ -65,6 +67,7 @@
   <div class="badges">
     <span class="badge mode">{{ result.mode | title }}</span>
     <span class="badge {{ status_class }}">{{ status_label }}</span>
+    {% for text, cls in notes %}<span class="badge {{ cls }}">{{ text }}</span>{% endfor %}
     {% if result.irreversible_step %}
       <span class="badge mode">Payment: {{ result.irreversible_step.replace('_', ' ') }}</span>
     {% endif %}
@@ -78,7 +81,9 @@
     <dt>Started</dt><dd>{{ result.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') }}</dd>
     <dt>Finished</dt><dd>{{ result.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') }}</dd>
     <dt>Duration</dt><dd>{{ '%.1f' | format(duration_s) }} s</dd>
-    {% if result.artifact_version %}<dt>Artifact version</dt><dd>{{ result.artifact_version }}</dd>{% endif %}
+    {% if result.artifact_version %}<dt>Artifact version</dt><dd>{{ result.artifact_version }}</dd>
+    {% elif artifact_not_saved %}<dt>Artifact version</dt><dd>not saved — the next request will run discovery again</dd>
+    {% endif %}
   </dl>
 
   {% if result.terminal_outputs %}
@@ -119,16 +124,16 @@
   </div>
   {% endif %}
 
-  {% if result.handoff_events %}
+  {% if handoffs %}
   <h2>A person in the loop</h2>
   <table>
-    <tr><th>Trigger</th><th>Resolution</th><th>Duration</th><th>Actions taken</th></tr>
-    {% for h in result.handoff_events %}
+    <tr><th>Why a person was asked</th><th>What happened</th><th>Duration</th><th>Actions taken</th></tr>
+    {% for h in handoffs %}
     <tr>
-      <td>{{ h.trigger_reason }}</td>
-      <td>{{ h.resolution.value if h.resolution else "—" }}</td>
-      <td>{{ (h.duration_ms / 1000) | round(1) ~ " s" if h.duration_ms is not none else "—" }}</td>
-      <td>{{ h.person_actions if h.person_actions is not none else "—" }}</td>
+      <td>{{ h.trigger }}</td>
+      <td>{{ h.resolution }}</td>
+      <td>{{ h.duration }}</td>
+      <td>{{ h.person_actions }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -148,7 +153,9 @@
       <td>
         {{ "the saved locator worked as-is" if step.locator_priority == 0
            else ("a backup locator was needed (fallback #" ~ step.locator_priority ~ ") - the page may have changed since this was learned" if step.locator_priority is not none else "—") }}
-        {{ ("; " ~ step.recovery_logs | length ~ " interruption(s) cleared first") if step.recovery_logs else "" }}
+        {% for log in step.recovery_logs %}
+        <div style="margin-top:4px;color:var(--muted);font-size:0.85em;">{{ recovery_text(log) }}</div>
+        {% endfor %}
       </td>
       <td>{{ step.error_message or "" }}</td>
     </tr>

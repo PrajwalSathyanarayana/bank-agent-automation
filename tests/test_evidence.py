@@ -12,6 +12,7 @@ from src.types.result_schema import (
     ExecutionResult,
     ExecutionStatus,
     FailureDetail,
+    HandoffResolution,
     HandoffTelemetry,
     RecoveryTier,
     StepExecutionTrace,
@@ -38,12 +39,12 @@ def _result(status, **overrides) -> ExecutionResult:
 
 
 def _step(index, status=StepStatus.PASSED, priority=0, recoveries=0, attempts=1,
-         description="Open Bill Pay for this member.") -> StepExecutionTrace:
+         description="Open Bill Pay for this member.", recovery_log=None) -> StepExecutionTrace:
+    log = recovery_log or {"timestamp": NOW, "tier": RecoveryTier.TIER_1_RULE, "resolved": True,
+                           "interruption_code": "PROMO_POPUP", "details": "clicked its target; it went away"}
     return StepExecutionTrace(step_id=f"s{index}", sequence_index=index, description=description, status=status,
                               safety_tier=SafetyTier.SAFE, attempt_count=attempts, duration_ms=100,
-                              locator_priority=priority,
-                              recovery_logs=[{"timestamp": NOW, "tier": RecoveryTier.TIER_1_RULE, "resolved": True}]
-                              * recoveries)
+                              locator_priority=priority, recovery_logs=[log] * recoveries)
 
 
 def test_write_report_creates_report_html_beside_the_runs_own_evidence(tmp_path):
@@ -69,6 +70,55 @@ def test_write_report_creates_report_html_beside_the_runs_own_evidence(tmp_path)
 def test_the_status_badge_matches_the_results_status(tmp_path, status, badge_class):
     html = render_report(_result(status), tmp_path)
     assert f'badge {badge_class}' in html
+
+
+def test_a_run_a_person_helped_with_is_badged_a_person_was_needed_even_though_it_succeeded(tmp_path):
+    # The main badge reads "a person was needed" whenever one was, regardless of whether the
+    # task they helped with went on to finish - that fact comes first, not "Done".
+    handoff = HandoffTelemetry(triggered_timestamp=NOW, trigger_reason="IRREVERSIBLE_STEP",
+                               resolution=HandoffResolution.RESUMED)
+    html = render_report(_result(ExecutionStatus.SUCCESS, handoff_events=[handoff]), tmp_path)
+    assert 'badge person">A person was needed</span>' in html
+
+
+def test_no_second_badge_appears_alongside_a_person_was_needed(tmp_path):
+    # One label, full stop - what actually happened stays in the summary and the handoff
+    # table, not a second badge next to this one.
+    handoff = HandoffTelemetry(triggered_timestamp=NOW, trigger_reason="IRREVERSIBLE_STEP",
+                               resolution=HandoffResolution.RESUMED)
+    html = render_report(_result(ExecutionStatus.SUCCESS, handoff_events=[handoff]), tmp_path)
+    assert 'badge ok">Done</span>' not in html
+
+
+def test_no_person_was_needed_badge_when_no_person_was_ever_involved(tmp_path):
+    html = render_report(_result(ExecutionStatus.SUCCESS), tmp_path)
+    assert "A person was needed" not in html
+
+
+def test_a_run_that_stayed_escalated_isnt_also_given_a_redundant_second_badge(tmp_path):
+    html = render_report(_result(ExecutionStatus.HUMAN_ESCALATED), tmp_path)
+    assert html.count("A person was needed") == 1
+
+
+def test_a_discovery_that_finished_without_saving_an_artifact_says_so(tmp_path):
+    handoff = HandoffTelemetry(triggered_timestamp=NOW, trigger_reason="IRREVERSIBLE_STEP",
+                               resolution=HandoffResolution.ABORTED)
+    result = _result(ExecutionStatus.HUMAN_ESCALATED, mode="DISCOVERY", handoff_events=[handoff])
+    html = render_report(result, tmp_path)
+    assert "Artifact not saved" in html
+    assert "not saved — the next request will run discovery again" in html
+
+
+def test_a_discovery_that_saved_an_artifact_isnt_tagged_not_saved(tmp_path):
+    result = _result(ExecutionStatus.SUCCESS, mode="DISCOVERY", artifact_version="3.0.1")
+    html = render_report(result, tmp_path)
+    assert "Artifact not saved" not in html
+
+
+def test_a_replay_is_never_tagged_artifact_not_saved(tmp_path):
+    # artifact_version is None by default in _result() and replay never "saves" one of its own.
+    html = render_report(_result(ExecutionStatus.SUCCESS, mode="REPLAY"), tmp_path)
+    assert "Artifact not saved" not in html
 
 
 def test_a_business_outcomes_code_and_description_are_shown(tmp_path):
@@ -158,10 +208,18 @@ def test_a_step_with_no_saved_description_says_so_plainly(tmp_path):
     assert "(no description saved for this step)" in html
 
 
-def test_a_step_with_recoveries_shows_their_count(tmp_path):
-    result = _result(ExecutionStatus.SUCCESS, step_traces=[_step(0, status=StepStatus.RECOVERED, recoveries=2)])
+def test_a_cleared_interruption_names_the_interruption_and_what_happened(tmp_path):
+    result = _result(ExecutionStatus.SUCCESS, step_traces=[_step(0, status=StepStatus.RECOVERED, recoveries=1)])
     html = render_report(result, tmp_path)
-    assert "2 interruption(s) cleared first" in html
+    assert "Recovered from PROMO_POPUP: clicked its target; it went away" in html
+
+
+def test_a_step_a_person_completed_reads_differently_from_a_cleared_interruption(tmp_path):
+    handoff_log = {"timestamp": NOW, "tier": RecoveryTier.TIER_3_HANDOFF, "resolved": True, "details": "done by a person"}
+    step = _step(0, status=StepStatus.RECOVERED, recoveries=1, recovery_log=handoff_log)
+    html = render_report(_result(ExecutionStatus.SUCCESS, step_traces=[step]), tmp_path)
+    assert "A person: done by a person" in html
+    assert "Recovered from" not in html
 
 
 def test_a_retried_step_says_how_many_times(tmp_path):
@@ -175,9 +233,18 @@ def test_no_steps_is_shown_plainly_not_as_an_empty_table(tmp_path):
     assert "No steps ran." in html
 
 
-def test_a_handoffs_trigger_and_resolution_are_shown(tmp_path):
+def test_a_handoffs_trigger_reads_in_plain_words_not_as_a_code(tmp_path):
     html = render_report(_result(ExecutionStatus.HUMAN_ESCALATED), tmp_path)
-    assert "OVER_AUTO_LIMIT" in html
+    assert "The amount is above the bank" in html and "limit for automatic payments" in html
+    assert "OVER_AUTO_LIMIT" not in html
+
+
+def test_a_handoffs_resolution_reads_in_plain_words(tmp_path):
+    handoff = HandoffTelemetry(triggered_timestamp=NOW, trigger_reason="OVER_AUTO_LIMIT",
+                               resolution=HandoffResolution.MANUAL_COMPLETED)
+    html = render_report(_result(ExecutionStatus.HUMAN_ESCALATED, handoff_events=[handoff]), tmp_path)
+    assert "Completed by the person" in html
+    assert "MANUAL_COMPLETED" not in html
 
 
 def test_screenshots_in_the_runs_folder_are_listed_and_linked(tmp_path):
@@ -239,12 +306,26 @@ def test_an_unreadable_result_json_is_skipped_not_fatal_to_the_rest(tmp_path, ca
     assert "broken" in capsys.readouterr().err
 
 
-def test_runs_are_listed_newest_first(tmp_path):
+def test_runs_are_listed_newest_first_within_the_same_mode(tmp_path):
     runs = tmp_path / "runs"
     _write_result(runs / "older", _result(ExecutionStatus.SUCCESS, start_time=NOW.replace(hour=1)))
     _write_result(runs / "newer", _result(ExecutionStatus.SUCCESS, start_time=NOW.replace(hour=5)))
     entries = discover_runs(runs)
     assert [entry.folder for entry in entries] == ["runs/newer", "runs/older"]
+
+
+def test_every_discovery_run_is_listed_before_every_replay_run_regardless_of_timing(tmp_path):
+    runs = tmp_path / "runs"
+    # An older discovery and a newer replay: a plain "newest first" sort would put the
+    # replay on top, but discovery runs must group above replay runs regardless of timing.
+    _write_result(runs / "old_discovery", _result(ExecutionStatus.SUCCESS, mode="DISCOVERY",
+                                                   start_time=NOW.replace(hour=1)))
+    _write_result(runs / "new_replay", _result(ExecutionStatus.SUCCESS, mode="REPLAY",
+                                               start_time=NOW.replace(hour=5)))
+    _write_result(runs / "newer_discovery", _result(ExecutionStatus.SUCCESS, mode="DISCOVERY",
+                                                     start_time=NOW.replace(hour=8)))
+    entries = discover_runs(runs)
+    assert [entry.folder for entry in entries] == ["runs/newer_discovery", "runs/old_discovery", "runs/new_replay"]
 
 
 def test_write_index_renders_every_listed_runs_report(tmp_path):
@@ -266,14 +347,42 @@ def test_the_front_page_links_to_each_runs_own_report(tmp_path):
     assert 'href="runs/a/report.html"' in html_path.read_text(encoding="utf-8")
 
 
-def test_the_front_page_can_be_filtered_by_mode(tmp_path):
+def test_the_front_page_has_a_discovery_only_and_replay_only_filter(tmp_path):
     _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS, mode="REPLAY"))
     _write_result(tmp_path / "runs" / "b", _result(ExecutionStatus.SUCCESS, mode="DISCOVERY"))
     html_path, _ = write_index(tmp_path)
     html = html_path.read_text(encoding="utf-8")
-    assert '<option value="Replay">Replay</option>' in html
-    assert '<option value="Discovery">Discovery</option>' in html
-    assert 'data-mode="Replay"' in html and 'data-mode="Discovery"' in html
+    assert '<option value="discovery">Discovery only</option>' in html
+    assert '<option value="replay">Replay only</option>' in html
+    assert 'id="discovery-section"' in html and 'id="replay-section"' in html
+
+
+def test_discovery_and_replay_runs_are_shown_in_two_separate_sections(tmp_path):
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS, mode="REPLAY", capability="replay_task"))
+    _write_result(tmp_path / "runs" / "b", _result(ExecutionStatus.SUCCESS, mode="DISCOVERY",
+                                                   capability="discovery_task"))
+    html_path, _ = write_index(tmp_path)
+    html = html_path.read_text(encoding="utf-8")
+    discovery_section = html.split('id="discovery-section"')[1].split('id="replay-section"')[0]
+    replay_section = html.split('id="replay-section"')[1]
+    assert "Discovery Task" in discovery_section and "Replay Task" not in discovery_section
+    assert "Replay Task" in replay_section and "Discovery Task" not in replay_section
+
+
+def test_the_index_tags_a_discovery_row_that_saved_no_artifact(tmp_path):
+    handoff = HandoffTelemetry(triggered_timestamp=NOW, trigger_reason="IRREVERSIBLE_STEP",
+                               resolution=HandoffResolution.ABORTED)
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.HUMAN_ESCALATED, mode="DISCOVERY",
+                                                    handoff_events=[handoff]))
+    html_path, _ = write_index(tmp_path)
+    assert "Artifact not saved" in html_path.read_text(encoding="utf-8")
+
+
+def test_a_mode_with_no_runs_yet_says_so_in_its_own_section(tmp_path):
+    _write_result(tmp_path / "runs" / "a", _result(ExecutionStatus.SUCCESS, mode="REPLAY"))
+    html_path, _ = write_index(tmp_path)
+    html = html_path.read_text(encoding="utf-8")
+    assert "No discovery runs yet." in html
 
 
 def test_an_empty_run_list_says_so_plainly_in_html(tmp_path):
