@@ -312,14 +312,9 @@ except itself and the two timestamps, so a field added later is signed by defaul
 hand edit is detected. Versions bump by what changed: a contract change is major, a change of
 flow is minor, a detail is patch; an identical rediscovery writes nothing.
 
-`artifacts/member_servicing_and_bill_pay/` keeps that task's whole history, v1.0.0 through
-v3.0.3, so the version policy is visible in the file names: each major bump is a contract
-change, such as the contract gaining its interruptions and payment checks. Four of the early
-files no longer load. They carry the 64-character keyed hash artifacts were signed with
-before this project moved to Ed25519, and when the migration command re-signed the rest it
-deliberately left these alone, because their old hash no longer matched their content and it
-will not bless what it cannot verify. Replay is unaffected: it takes the highest version,
-v3.0.3, and refuses to fall back to an older one.
+`artifacts/member_servicing_and_bill_pay/` keeps four versions of that task, v3.0.0 through
+v3.0.3; the three patch bumps are rediscoveries that changed only details. Replay always
+takes the highest.
 
 ## Evidence
 
