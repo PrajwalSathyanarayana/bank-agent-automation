@@ -14,7 +14,8 @@ from src.config.env import env
 from src.config.settings import settings
 from src.discovery.artifact_builder import write_artifact
 from src.handoff.session_manager import OperatorSetup
-from src.main import BILL_PAY, CONTRACTS
+from src.catalog import BILL_PAY
+from src.main import CONTRACTS
 from src.replay.executor import ReplayRequest, replay
 from src.safety.integrity import sign
 from src.surface.browser import BrowserSession

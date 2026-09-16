@@ -12,11 +12,11 @@ from src.config.env import env
 from src.config.settings import settings
 from src.locating.checks import find_phrase, phrase_matches, value_beside
 from src.locating.resolver import resolve
-from src.catalog import CHECKING, EMAIL, PHONE, SAVINGS
+from src.catalog import BILL_PAY, CHECKING, EMAIL, PHONE, SAVINGS
 from src.locating.values import read_output
 from src.handoff.ws_server import FeedUnavailable, HandoffFeed
 from src.intake import IntakeAnswer, IntakeUnavailable
-from src.main import BILL_PAY, CONTRACTS, main, parse_args
+from src.main import CONTRACTS, main, parse_args
 from src.observability.logger import RunLogger
 from src.router import Handled
 from src.types.result_schema import (
@@ -151,32 +151,36 @@ def test_every_page_of_the_flow_and_its_outcomes_is_allowed_but_profile_edit_is_
     assert route_allowed(urlparse(CONTRACTS[BILL_PAY].target_url).path, allowed)
 
 
-def test_the_discover_command_reads_typed_inputs_a_step_limit_and_a_window_option():
-    args = parse_args(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co",
-                       "--max-steps", "25", "--headed"])
-    assert (args.member_id, args.amount, args.payee, args.max_steps, args.headed) == (
-        "10234", 50.0, "Sunbelt Electric Co", 25, True)
+BILL_PAY_INPUTS = ["--input", "member_id=10234", "--input", "amount=50", "--input", "payee_name=Sunbelt Electric Co"]
+
+
+def test_the_discover_command_reads_a_capability_its_inputs_a_step_limit_and_a_window_option():
+    args = parse_args(["discover", "--capability", BILL_PAY, *BILL_PAY_INPUTS, "--max-steps", "25", "--headed"])
+    assert (args.capability, args.input, args.max_steps, args.headed) == (
+        BILL_PAY, ["member_id=10234", "amount=50", "payee_name=Sunbelt Electric Co"], 25, True)
+
+
+def test_a_capability_not_in_the_catalog_is_refused_by_argparse_itself():
+    with pytest.raises(SystemExit):
+        parse_args(["discover", "--capability", "not_a_real_task", *BILL_PAY_INPUTS])
 
 
 def test_the_step_limit_defaults_to_the_setting_and_the_window_stays_hidden():
-    args = parse_args(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"])
+    args = parse_args(["discover", "--capability", BILL_PAY, *BILL_PAY_INPUTS])
     assert (args.max_steps, args.headed) == (None, False)
 
 
 @pytest.mark.parametrize(
     "argv", [pytest.param(["run", "For member 10234, pay 50 to Sunbelt Electric Co"], id="run"),
-             pytest.param(["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"],
-                          id="discover"),
-             pytest.param(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"],
-                          id="replay")],
+             pytest.param(["discover", "--capability", BILL_PAY, *BILL_PAY_INPUTS], id="discover"),
+             pytest.param(["replay", "--capability", BILL_PAY, *BILL_PAY_INPUTS], id="replay")],
 )
 def test_slow_mo_defaults_to_none_on_every_command(argv):
     assert parse_args(argv).slow_mo is None
 
 
 def test_slow_mo_takes_a_value_in_milliseconds():
-    args = parse_args(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co",
-                       "--slow-mo", "250"])
+    args = parse_args(["replay", "--capability", BILL_PAY, *BILL_PAY_INPUTS, "--slow-mo", "250"])
     assert args.slow_mo == 250
 
 
@@ -187,28 +191,60 @@ def test_slow_mo_takes_a_value_in_milliseconds():
      pytest.param(["--operator"], False, id="operator")],
 )
 def test_slow_mo_without_a_visible_window_prints_a_note(capsys, extra, note_shown):
-    args = parse_args(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co",
-                       "--slow-mo", "250", *extra])
+    args = parse_args(["replay", "--capability", BILL_PAY, *BILL_PAY_INPUTS, "--slow-mo", "250", *extra])
     main_module._slow_mo_note(args)
     assert ("Note:" in capsys.readouterr().out) is note_shown
 
 
 def test_no_note_when_slow_mo_isnt_given(capsys):
-    args = parse_args(["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"])
+    args = parse_args(["replay", "--capability", BILL_PAY, *BILL_PAY_INPUTS])
     main_module._slow_mo_note(args)
     assert capsys.readouterr().out == ""
 
 
+# --- --input parsing: typed and checked against the capability's own declared shape ---
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [pytest.param(["member_id=10234", "amount=50", "payee_name=Sunbelt Electric Co"],
+                  {"member_id": "10234", "amount": 50.0, "payee_name": "Sunbelt Electric Co"}, id="bill pay"),
+     pytest.param(["member_id=10234"], {"member_id": "10234"}, id="a capability needing only member_id")],
+)
+def test_inputs_are_typed_by_what_the_capability_declares(raw, expected):
+    capability = BILL_PAY if "amount" in expected else CHECKING
+    assert main_module._parse_inputs(capability, raw) == expected
+
+
+def test_an_unknown_input_key_is_refused_naming_what_is_declared():
+    with pytest.raises(main_module.InputsInvalid, match="has no input named 'not_a_field'"):
+        main_module._parse_inputs(BILL_PAY, ["not_a_field=x"])
+
+
+def test_a_missing_required_input_is_refused():
+    with pytest.raises(main_module.InputsInvalid, match="needs --input for: amount"):
+        main_module._parse_inputs(BILL_PAY, ["member_id=10234", "payee_name=Sunbelt Electric Co"])
+
+
+def test_a_non_numeric_amount_is_refused_not_guessed():
+    with pytest.raises(main_module.InputsInvalid, match="amount must be a number"):
+        main_module._parse_inputs(BILL_PAY, ["member_id=10234", "amount=fifty", "payee_name=Sunbelt Electric Co"])
+
+
+def test_an_input_without_an_equals_sign_is_refused():
+    with pytest.raises(main_module.InputsInvalid, match="must be KEY=VALUE"):
+        main_module._parse_inputs(BILL_PAY, ["member_id"])
+
+
 # --- the replay command ---
 
-REPLAY_ARGS = ["replay", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"]
+REPLAY_ARGS = ["replay", "--capability", BILL_PAY, *BILL_PAY_INPUTS]
 
 
-def test_the_replay_command_reads_the_same_typed_inputs_and_a_window_option():
-    args = parse_args(["replay", "--member-id", "40412", "--amount", "25.5", "--payee", "Desert Valley Water Utility",
-                       "--headed"])
-    assert (args.command, args.member_id, args.amount, args.payee, args.headed) == (
-        "replay", "40412", 25.5, "Desert Valley Water Utility", True)
+def test_the_replay_command_reads_the_same_capability_shape_and_a_window_option():
+    args = parse_args(["replay", "--capability", BILL_PAY, "--input", "member_id=40412", "--input", "amount=25.5",
+                       "--input", "payee_name=Desert Valley Water Utility", "--headed"])
+    assert (args.command, args.capability, args.input, args.headed) == (
+        "replay", BILL_PAY, ["member_id=40412", "amount=25.5", "payee_name=Desert Valley Water Utility"], True)
 
 
 def test_the_replay_command_has_no_step_limit_since_no_model_takes_steps():
@@ -314,7 +350,7 @@ def test_a_busy_feed_port_is_reported_and_the_run_goes_on_without_it(monkeypatch
     assert "carrying on without announcements" in capsys.readouterr().out
 
 
-DISCOVER_ARGS = ["discover", "--member-id", "10234", "--amount", "50", "--payee", "Sunbelt Electric Co"]
+DISCOVER_ARGS = ["discover", "--capability", BILL_PAY, *BILL_PAY_INPUTS]
 RUN_ARGS = ["run", "For member 10234, pay 50 to Sunbelt Electric Co"]
 
 
@@ -397,6 +433,28 @@ def test_the_replay_command_says_when_the_bank_isnt_running(monkeypatch, capsys)
     monkeypatch.setattr(main_module, "_bank_is_up", lambda: False)
     assert main(REPLAY_ARGS) == 2
     assert "isn't answering" in capsys.readouterr().out
+
+
+def test_bank_reachability_tolerates_the_mock_banks_own_slow_page_switch(monkeypatch):
+    # A bank that's up but deliberately slow (MOCK_BANK_SLOW_PAGES_MS, D109) must read as
+    # up, not as unreachable - otherwise the one scenario that switch exists to test can
+    # never be reached at all. Regression for a real bug: this used to time out at 3s.
+    seen = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return None
+
+    def fake_urlopen(url, timeout):
+        seen["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(main_module.urllib.request, "urlopen", fake_urlopen)
+    assert main_module._bank_is_up() is True
+    assert seen["timeout"] >= 35
 
 
 # --- the bill pay interruptions and payment checks, tried on the real pages ---
