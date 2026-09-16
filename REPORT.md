@@ -95,9 +95,10 @@ An artifact is a capability an agent can call: **a contract plus a flow**.
 
 - SemVer, bumped by what changed: contract = major, flow = minor, detail = patch. An identical
   rediscovery writes nothing.
-- Ed25519 signature over the canonical content (everything except timestamps). Replay verifies
-  against public keys committed with the code. A machine that only replays cannot produce an
-  artifact replay would trust.
+- Ed25519 signature over the canonical content: everything except the signature field itself
+  and the two timestamps, so a field added later is signed by default. Replay verifies against
+  public keys committed with the code. A machine that only replays cannot produce an artifact
+  replay would trust.
 
 ---
 

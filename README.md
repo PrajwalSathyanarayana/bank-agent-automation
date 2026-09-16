@@ -78,42 +78,65 @@ interstitials, session expiry. Five tasks are learned and replayable today.
    the browser surface, the handoff, and the evidence logger.
 ```
 
-**Discovery** (`src/discovery/`). Each turn the model receives a screenshot with numbered
-marks and a text list of the elements, and replies with exactly one tool call: click, type,
-choose, read a value by its label, assert a phrase, mark the goal complete, or report stuck.
-The loop owns every control point: step and time limits, the allowlist, the risk tier, what
-gets recorded, and how the run ends. Locators are generated and proven on the live page by
-code in a legacy-aware order (form field name, visible text, the field next to its label,
-accessible name, position), never by the model. At the end the recording is validated,
-scanned for literal secrets or sensitive-looking values, signed, versioned by what changed
-(contract, flow or detail), and written to `artifacts/`.
+### Discovery (`src/discovery/`)
 
-**Replay** (`src/replay/`). Loads the task's latest version, verifies the signature against the
-committed public keys, and refuses anything untrusted (never falling back to an older
-version). For each step: clear any declared interruption that is showing, find the element
-with the first locator that matches exactly one, pass the same safety gate discovery used,
-act, then hold the step's checkpoints. When a check does not hold, a declared outcome on the
-page becomes the result, a declared interruption is recovered from and the step retried,
-and anything else is a failure with a screenshot.
+- **Each turn the model sees** a screenshot with numbered marks and a text list of the
+  elements it may act on. It never sees a selector or a coordinate.
+- **It replies with exactly one tool call:** click, type, choose, read a value by its label,
+  assert a phrase, mark the goal complete, or report stuck.
+- **The loop owns every control point:** step and time limits, the allowlist, the risk tier,
+  what is recorded, and how the run ends. The model only chooses.
+- **Locators come from code, not the model.** Candidates are generated in a legacy-aware order
+  (form field name, visible text, the field next to its label, accessible name, position),
+  proven on the live page, and the best three kept.
+- **Every action is recorded before it runs,** while its element is still on the page, with
+  checkpoints added after: the page path, the page title, and the next step's element.
+- **At the end** the recording is validated, scanned for literal secrets and sensitive-looking
+  values, signed, versioned by what changed (contract, flow or detail), and written to
+  `artifacts/`.
 
-**Handoff** (`src/handoff/`). Triggers are automatic: a stuck agent, a payment that cannot be
-authorised, a step replay cannot recover. The run pauses, photographs the page, announces the
-request with its context, and shows a bar at the top of its own window. After **Take over**
-the lock belongs to the person; dialogs are theirs to answer; every click, field change (by
-label, never the value) and page visited is logged. **Hand back** resumes the run on the same
-page; **I finished it** reads the outputs off the page; **Stop** ends the run. A payment is
-never made by the system once a person has had the window.
+### Replay (`src/replay/`)
 
-**The task contract** (`src/catalog.py`). Adding a task is a declaration, not engine code: the
-goal template, the start page, typed inputs and outputs, the bank's known answers with the
-text that signals each, the pages the task may visit, the interruptions it may recover from,
-and the labels a payment must match on the confirmation screen.
+- **Loads the task's latest version and verifies the signature first.** Anything untrusted is
+  refused, and it never falls back to an older version.
+- **For each step:** clear any declared interruption showing, find the element with the first
+  locator that matches exactly one, pass the same safety gate discovery used, act, then hold
+  the step's checkpoints.
+- **When a check does not hold,** the contract decides, in this order:
+  - a declared outcome on the page becomes the result (an answer for the caller);
+  - a declared interruption is recovered by its one approved action and the step retried;
+  - anything else is a failure naming the step, what was expected, what was seen, with a
+    screenshot.
+- **A risky or irreversible action is never retried:** it could submit twice.
+
+### Handoff (`src/handoff/`)
+
+- **Triggers are automatic:** a stuck agent, a payment that cannot be authorised, a step
+  replay cannot recover on its own.
+- **The run pauses,** photographs the page, announces the request with its context, and shows
+  a bar at the top of its own window.
+- **After Take over** the lock belongs to the person. Dialogs are theirs to answer, and every
+  click, field change (by label, never the value) and page visited is logged.
+- **Three ways back:** *Hand back* resumes the run on the same page; *I finished it* reads the
+  outputs off the page; *Stop* ends the run.
+- **Once a person has had the window,** the system never makes the payment itself.
+
+### The task contract (`src/catalog.py`)
+
+Adding a task is a declaration, not engine code. Each one states:
+
+- the goal template and the start page;
+- its typed inputs and outputs;
+- the bank's known answers, with the text that signals each;
+- the pages the task may visit;
+- the interruptions it may recover from, and the one approved fix for each;
+- the labels a payment must match on the confirmation screen.
 
 ## Tech stack
 
 | Layer | Technology | Why |
 |---|---|---|
-| Language | Python 3.12 | One language for the engines, the mock bank and the tests |
+| Language | Python 3.11+ (built on 3.12) | One language for the engines, the mock bank and the tests |
 | Browser automation | Playwright (async API) | Real Chromium, auto-waiting, dialog control, trace recording |
 | LLM | Anthropic SDK, Claude via `ANTHROPIC_MODEL` | Discovery and the intake; strict tool calls, prompt caching, one action per turn |
 | Schemas and validation | Pydantic v2 | The artifact, step and result contracts, validated on every load and save |
@@ -158,9 +181,34 @@ python -m src.main run "For member 40412, look up the checking balance"
 
 The five tasks in `src/catalog.py` have all been learned, and their signed artifacts are
 committed, so every request for them replays with no model call beyond the one that reads
-the sentence. To make the system learn a task fresh, delete its folder under `artifacts/`
-and make a signing key pair once with `python -m src.keys generate`; the next request for
-that task runs discovery and saves a new artifact.
+the sentence.
+
+### Signing keys
+
+**Nothing to set up to replay.** Every artifact is signed, and replay verifies each one
+against the public keys in `keys/trusted/`. That folder ships with `discovery.pub`, the
+public half of the key these artifacts were signed with, so a fresh clone can verify and
+replay all five tasks immediately. A public key cannot sign anything, so committing it gives
+away nothing: it only lets anyone check that these artifacts came from that key and have not
+been edited since.
+
+**A key pair is needed only to learn a task,** because discovery has to sign what it learns.
+There is no private key in the repository (it is gitignored), so a discovery run on a fresh
+clone stops before it calls the model, with `SIGNING_KEY_MISSING` and the path it looked in.
+Nothing is spent finding this out.
+
+To give yourself a key pair and watch the system learn a task from scratch:
+
+```
+python -m src.keys generate --name my-key      # any name; discovery.pub is already taken
+rm -r artifacts/read_savings_balance           # Windows: rmdir /s artifacts\read_savings_balance
+python -m src.main run "For member 10234, read the savings balance" --headed
+```
+
+`generate` writes your private key to `secrets/` (creating the folder, never committed) and
+its public half to `keys/trusted/my-key.pub`. The request then finds nothing saved for that
+task, runs discovery, and writes a new signed artifact. Replay trusts every key in the
+folder, so the committed artifacts and your new one work side by side.
 
 Run the tests (no API key, no running bank needed):
 
@@ -203,7 +251,8 @@ python -m src.keys generate        make the key pair that signs artifacts
 | A bank rule enforced | `run "For member 10234, change the phone number to 520-555-0199"` (`INVALID_PHONE`) |
 | A request missing a value | `run "Pay Sunbelt Electric Co for member 10234"` (asks for the amount, runs nothing) |
 | A task it does not know | `run "Close the account of member 10234"` (lists the tasks it knows, runs nothing) |
-| A slow bank | restart the bank with `MOCK_BANK_SLOW_PAGES_MS=2500`; the run ends `TECHNICAL_FAIL` / `PAGE_TIMEOUT` |
+| A slow bank, waited for | restart the bank with `MOCK_BANK_SLOW_PAGES_MS=2500`; the run still succeeds, just slower |
+| A bank too slow to answer | restart with `MOCK_BANK_SLOW_PAGES_MS=35000`, above the 30-second page limit; `TECHNICAL_FAIL` / `PAGE_TIMEOUT` at step 0, after about a minute |
 | A changed page | restart with `MOCK_BANK_RENAMED_MENU=true`; the step trace shows a fallback locator in use |
 | A tampered artifact | edit one character in the latest artifact file; the run is refused before a browser opens |
 
@@ -259,73 +308,150 @@ the bank resets it on every start.
 ```
 
 Inputs appear only as placeholders, credentials only by name. The signature covers everything
-except the timestamps, so any edit is detected. Versions bump by what changed: a contract
-change is major, a change of flow is minor, a detail is patch; an identical rediscovery writes
-nothing.
+except itself and the two timestamps, so a field added later is signed by default and any
+hand edit is detected. Versions bump by what changed: a contract change is major, a change of
+flow is minor, a detail is patch; an identical rediscovery writes nothing.
+
+`artifacts/member_servicing_and_bill_pay/` keeps that task's whole history, v1.0.0 through
+v3.0.3, so the version policy is visible in the file names: each major bump is a contract
+change, such as the contract gaining its interruptions and payment checks. Four of the early
+files no longer load. They carry the 64-character keyed hash artifacts were signed with
+before this project moved to Ed25519, and when the migration command re-signed the rest it
+deliberately left these alone, because their old hash no longer matched their content and it
+will not bless what it cannot verify. Replay is unaffected: it takes the highest version,
+v3.0.3, and refuses to fall back to an older one.
 
 ## Evidence
 
-`evidence/index.html` lists every committed run, learning runs first, each linking to its
-own report. Every run has its own folder:
+**Start here: open `evidence/index.html` in a browser.** It is the summary over every run in
+the repository, learning runs in one section and replays in the other, each row showing the
+task, what happened, how long it took and a link to that run's own report. A filter switches
+between the two. Badges say whether a run finished, returned one of the bank's answers,
+needed a person, or stopped.
+
+Every command updates this page as it finishes, so it is always current. To rebuild it by
+hand, which also re-renders every run's report with the current template:
+
+```
+python -m src.evidence.index
+```
+
+Behind each row is the run's own folder, with the raw evidence for a technical reader:
 
 ```
 evidence/runs/2026-09-16_read_savings_balance_discovery_87432f5c/
-├── log.json          one JSON line per event: model decisions and reasons, locators tried,
-│                     recoveries, handoffs, tokens used
-├── result.json       the structured result the caller receives
-├── report.html       the same run for a non-technical reader
-├── trace.zip         Playwright trace (playwright show-trace trace.zip), paused around the
-│                     password keystroke
-└── screenshots/      every page the model saw; the page a run ended on; every failure,
-                      recovery and handoff
+├── log.json       One JSON line per event: decisions, locators, recoveries, tokens used
+├── result.json    The structured result the caller receives
+├── report.html    The same run, written for a non-technical reader
+├── trace.zip      Playwright trace; open with playwright show-trace trace.zip
+└── screenshots/   Every page the model saw; failures, recoveries and handoffs
 ```
 
 ## Project structure
 
 ```
 bank-agent-automation/
-├── mock_bank/                      Mock credit union teller portal (Flask + Jinja2)
-│   ├── app.py                      App factory; test switches (slow pages, renamed menu)
-│   ├── blueprints/                 auth, member, billpay, activity
-│   ├── data/members.json           Fictitious members and payees
-│   ├── static/                     legacy.css, legacy.js (confirm dialog, session clock)
-│   └── templates/                  Server-rendered pages, layout tables, no test ids
-├── src/
-│   ├── main.py                     CLI: run, discover, replay
-│   ├── catalog.py                  The five task contracts
-│   ├── intake.py                   A request in words → a task and its inputs
-│   ├── router.py                   Learned → replay; otherwise → discovery
-│   ├── keys.py                     Generate the signing key pair; re-sign old artifacts
-│   ├── discovery/                  The LLM observe–decide–act loop
-│   │   ├── agent.py                The loop and every control point
-│   │   ├── perception.py           Screenshot + numbered element list (collect_elements.js)
-│   │   ├── locators.py             Locators generated and proven on the live page
-│   │   ├── recorder.py             An action becomes a step with automatic checkpoints
-│   │   ├── backstop.py             Save-time scan for secrets and sensitive literals
-│   │   ├── artifact_builder.py     Validate → scan → sign → version → write
-│   │   ├── person_steps.py         A person's handoff actions recorded as steps
-│   │   └── prompts.py              System prompt and tool definitions
-│   ├── replay/                     Deterministic execution, no model
-│   │   ├── executor.py             Load, verify, run each step, one structured result
-│   │   ├── locator_resolver.py     Priority fallbacks with a retry budget
-│   │   ├── checks.py               Checkpoints after every step
-│   │   └── recovery_engine.py      Declared outcomes and interruptions
-│   ├── safety/                     Allowlist, risk tiers, payment authorization, redaction,
-│   │                               Ed25519 signing, key handling, secret typing rule
-│   ├── handoff/                    Session lock, in-window control bar, WebSocket feed, watcher
-│   ├── surface/browser.py          The one module that acts on the page for both modes
-│   ├── locating/                   Shared locator resolution and page reading rules
-│   ├── storage/artifacts.py        Saved versions; the latest trusted one
-│   ├── observability/              Run logger, per-run evidence folders, plain-English summaries
-│   ├── evidence/                   report.html per run and the index page
-│   ├── types/                      Pydantic schemas: artifact, step, result; versioning rules
-│   └── config/                     Environment and settings
-├── tests/                          1,222 tests; browser tests use an in-process mock bank
-├── artifacts/<capability>/         Learned, signed artifacts, one folder per task
-├── evidence/                       Committed runs and the index page
-├── keys/trusted/                   Public keys replay trusts
+│
+├── src/                             The system
+│   ├── main.py                      Command line: run, plus replay and discover for development
+│   ├── catalog.py                   The five task contracts, declared once by an engineer
+│   ├── intake.py                    A request in words becomes a task and its inputs
+│   ├── router.py                    A learned task goes to replay, otherwise to discovery
+│   ├── keys.py                      Generate the signing key pair, re-sign old artifacts
+│   │
+│   ├── discovery/                   The LLM observe, decide, act loop
+│   │   ├── agent.py                 The loop and every control point
+│   │   ├── perception.py            A screenshot plus a numbered element list
+│   │   ├── collect_elements.js      The in-page collector perception.py runs
+│   │   ├── locators.py              Candidates generated, proven and ranked on the live page
+│   │   ├── locator_parts.js         The in-page reader for an element's raw parts
+│   │   ├── recorder.py              An action becomes a step with automatic checkpoints
+│   │   ├── backstop.py              The save-time scan for secrets and sensitive literals
+│   │   ├── artifact_builder.py      Validate, scan, sign, version, write
+│   │   ├── person_steps.py          A person's handoff actions recorded as steps
+│   │   └── prompts.py               The system prompt and the tool definitions
+│   │
+│   ├── replay/                      Deterministic execution, no model
+│   │   ├── executor.py              Load, verify, run each step, one structured result
+│   │   ├── locator_resolver.py      Locators in priority order, within a retry budget
+│   │   ├── checks.py                A step's checkpoints after its action
+│   │   └── recovery_engine.py       Declared outcomes and declared interruptions
+│   │
+│   ├── safety/                      The guardrails, shared by both engines
+│   │   ├── allowlist.py             Permitted domain, the task's pages, action types
+│   │   ├── classifier.py            Safe, risky or irreversible; re-checked at replay
+│   │   ├── authorization.py         The payment check before an irreversible step
+│   │   ├── integrity.py             Ed25519 signing and verification
+│   │   ├── keys.py                  The private key and the trusted public keys
+│   │   ├── secret_typing.py         A secret only into a password box, and nothing else there
+│   │   ├── sandbox.py               A sandbox must be on this machine
+│   │   └── redactor.py              Redaction patterns and exact secret scrubbing
+│   │
+│   ├── handoff/                     A person takes the live window, and hands it back
+│   │   ├── session_manager.py       The lock, the token, the pause and the resume
+│   │   ├── control_bar.py           Shows and removes the bar, reads what it reports
+│   │   ├── control_bar.js           The in-page bar and the person's actions
+│   │   ├── ws_server.py             The announcement feed
+│   │   └── watch.py                 Prints each announcement, a stand-in for a dashboard
+│   │
+│   ├── locating/                    How a stored locator is read on a page, used by both
+│   │   ├── resolver.py              A stored locator becomes a live one, placeholders filled
+│   │   ├── checks.py                Phrase matching, element wording, the value beside a label
+│   │   └── values.py                A page value read as its declared type, money to the cent
+│   │
+│   ├── types/                       The contracts, as Pydantic v2 models
+│   │   ├── artifact_schema.py       The artifact: a contract plus a flow
+│   │   ├── step_schema.py           A step, its locators and its checkpoints
+│   │   ├── result_schema.py         What every run returns
+│   │   ├── versioning.py            Which part of the version a change bumps
+│   │   ├── placeholders.py          The only link between a step and an input
+│   │   └── routes.py                Page path patterns
+│   │
+│   ├── observability/               What every run leaves behind
+│   │   ├── logger.py                One JSON line per event, redacted at one chokepoint
+│   │   └── summary.py               The plain-English result summary
+│   │
+│   ├── evidence/                    Presenting saved runs
+│   │   ├── report.py                One run's result becomes report.html
+│   │   ├── index.py                 Every run becomes index.html and index.md
+│   │   └── templates/               The two Jinja2 templates
+│   │
+│   ├── surface/                     The one place that acts on a page, for both engines
+│   │   └── browser.py               Clicks, typing, dialogs, secrets at the keystroke, traces
+│   │
+│   ├── storage/                     Saved artifacts on disk
+│   │   └── artifacts.py             A task's versions, and the latest trusted one
+│   │
+│   └── config/
+│       ├── env.py                   Environment variables, secrets held wrapped
+│       └── settings.py              Limits, timeouts and resolved paths
+│
+├── mock_bank/                       The stand-in legacy portal (Flask + Jinja2)
+│   ├── app.py                       App factory, test switches, start-up data check
+│   ├── blueprints/                  auth.py, member.py, billpay.py, activity.py
+│   ├── data/members.json            Fictitious members, accounts and payees
+│   ├── templates/                   Eleven pages: layout tables, no test ids
+│   └── static/                      legacy.css, legacy.js (the confirm dialog, session clock)
+│
+├── tests/                           1,222 tests, none of which call the model
+│   ├── conftest.py                  The in-process bank and browser fixtures
+│   └── test_*.py                    One file per module
+│
+├── artifacts/                       Learned artifacts, signed
+│   └── <task>/                      One folder per task, one file per version
+│
+├── evidence/                        The committed runs
+│   ├── index.html                   The front page linking to every run
+│   ├── index.md                     The same list as a Markdown table
+│   └── runs/                        One folder per run, as shown above
+│
+├── keys/trusted/                    The public keys replay verifies against
+├── secrets/                         Your signing private key; created by you, never committed
+├── .env.example                     Copy to .env and fill in; .env is never committed
 ├── requirements.txt
-└── .env.example
+├── README.md
+├── REPORT.md                        The design write-up
+└── 1A_Main_Architecture_Diagram.png
 ```
 
 ## Design notes and limits
